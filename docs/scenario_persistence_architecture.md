@@ -40,7 +40,8 @@ value was authoritative; newly saved rows retain the user's selected method.
 
 Production deployment should replace repository composition with
 `SqlServerScenarioRepository` after implementing it with approved pyodbc or
-SQLAlchemy dependencies. The public repository contract remains unchanged.
+SQLAlchemy dependencies. The repository contract requires the requesting user
+for every ownership-sensitive operation.
 
 SQL Server should provide equivalents of `ScenarioHeader`, `ScenarioChange`,
 `ScenarioResultSummary`, and `ScenarioAuditLog`, with foreign keys and indexes on
@@ -50,7 +51,7 @@ procedures or parameterized queries should:
 - create a header, changes, summaries, and audit rows in one transaction;
 - update/archive/delete with `WHERE RowVersion = @ExpectedRowVersion`;
 - return the new row version atomically;
-- enforce owner/visibility rules at the service/repository boundary;
+- enforce owner-only rules at the service and repository boundaries;
 - paginate and search headers server-side;
 - retrieve change and result rows only for one authorized scenario.
 
@@ -69,15 +70,69 @@ SQL Server should use normal row-level locking and atomic version predicates.
 
 ## Ownership and visibility
 
-- `private`: readable only by the owner.
-- `shared`: readable by authenticated users.
-- update, archive, and delete: owner only.
-- shared scenarios owned by another user: open or copy only.
-- copy: creates a new private scenario owned by the requesting user.
+- every scenario operation is restricted to its owner;
+- list queries filter by `owner_user_id` in the database query;
+- create, update, and copy always persist `visibility = 'private'`;
+- the visibility column remains temporarily for backward compatibility only;
+- legacy rows marked `shared` receive no broader access and remain owner-only.
 
 The local `CurrentUser` is loaded from `config/local_user.json`. This adapter is
 deliberately separate from UI pages so Active Directory/SSO claims can replace it
 without changing repositories or scenario calculations.
+
+## Scenario selection scope
+
+`SelectionScope` defines the four supported editing scopes: the user's assigned
+branch, manually selected branches, selected regions, and all branches. The pure
+`SelectionResolver` converts a scope and baseline branch metadata into an ordered,
+deduplicated list of active branch IDs. It does not run calculations or access
+persistence or Streamlit.
+
+Selection affects only which branch rows are exposed for editing. The scenario
+workflow still applies those edits to a copy of the complete baseline dataset and
+reruns the ranking model for the full bank. Saved scenarios retain their resolved
+branch IDs; because older records do not store scope metadata, they reopen as
+`SELECTED_BRANCHES`.
+
+## Bulk rules and manual overrides
+
+The pure `ScenarioRuleEngine` expands independent indicator rules for resolved
+branch IDs. Manual overrides take precedence over bulk rules, which take
+precedence over baseline values. The engine produces structured preview rows,
+validation issues, and canonical `ScenarioChange` records; ranking, persistence,
+selection, authorization, and Streamlit remain outside it.
+
+`INDICATOR_REGISTRY` is authoritative for the eight canonical indicator keys and
+their value domains. `profit_loss` permits any finite value; the other seven
+indicators have a minimum of zero. Values are not clamped or rounded by the rule
+engine.
+
+Rule definitions are stored in the existing scenario summary JSON under
+`scenario_definition`, including schema version, scope and selection inputs,
+operations, signed inputs, overrides, and validation status. This avoids a schema
+migration. Older scenarios are reconstructed as `SET_VALUE` manual overrides so
+their persisted branch-level final values are not reinterpreted.
+
+Manual overrides are displayed as branch groups with stable UUID `group_id`
+values. A user selects the branch once and configures all eight indicators in one
+form. Each persisted domain row also retains a stable UUID `row_id`. Widget
+identity, group editing, and deletion never use list position. Duplicate
+validation applies only to `(branch_id, indicator_key)`; one branch may therefore
+carry independent overrides for all eight indicators.
+
+The centered scenario definition uses `scenario_mode` with either
+`ONLY_USER_BRANCH` or `USER_AND_OTHERS`. `focus_branch_id` and
+`focus_branch_source` distinguish an assigned user branch from a staff-selected
+branch without creating separate organizational user types. Focus-branch
+overrides are persisted separately from network bulk rules and branch exceptions.
+The network scope contains only other branches, enforcing the effective
+precedence `focus_branch_override > branch_exception > network_bulk_rule > baseline`.
+
+Profit/Loss (`profit_loss`) preserves its signed raw value and uses raw min–max
+benefit normalization: `((x - min) / (max - min)) * 999 + 1`. This produces the
+same documented 1–1000 normalized scale as every other indicator. Its weighted
+contribution is the normalized score multiplied by `0.03`; raw, normalized, and
+weighted values remain separately labeled.
 
 ## Audit logging
 

@@ -9,8 +9,18 @@ import streamlit as st
 
 SESSION_DEFAULTS: dict[str, Any] = {
     "scenario_name": "",
+    "selection_scope": "SELECTED_BRANCHES",
+    "scenario_mode": "ONLY_USER_BRANCH",
+    "focus_branch_id": None,
+    "focus_branch_source": None,
     "selected_regions": [],
-    "selected_branches": [],
+    "selected_branch_ids": [],
+    "scenario_definition": {},
+    "manual_override_rows": [],
+    "manual_override_groups": [],
+    "focus_branch_override_rows": [],
+    "focus_branch_overrides": [],
+    "branch_exception_groups": {},
     "scenario_changes": [],
     "scenario_dataframe": None,
     "scenario_results": None,
@@ -33,9 +43,12 @@ def initialize_session_state(
 ) -> MutableMapping[str, Any]:
     """Initialize all cross-page keys once without overwriting existing values."""
     target = st.session_state if state is None else state
+    if "selected_branch_ids" not in target and "selected_branches" in target:
+        target["selected_branch_ids"] = list(target["selected_branches"])
     for key, default in SESSION_DEFAULTS.items():
         if key not in target:
             target[key] = default.copy() if isinstance(default, list) else default
+    target.pop("selected_branches", None)
     return target
 
 

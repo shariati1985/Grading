@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
+import inspect
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -19,6 +20,8 @@ from persistence import (
     SQLiteScenarioRepository,
 )
 from persistence.models import ScenarioChangeRecord, ScenarioRecord, ScenarioResultSummary
+from persistence.contracts import ScenarioRepository
+from persistence.sqlserver_scenario_repository import SqlServerScenarioRepository
 from services.user_context import load_current_user
 
 
@@ -78,36 +81,85 @@ def repository(tmp_path: Path) -> SQLiteScenarioRepository:
     return SQLiteScenarioRepository(tmp_path / "scenarios.db")
 
 
-@pytest.mark.parametrize("visibility", ["private", "shared"])
-def test_create_private_and_shared_scenarios(
-    repository: SQLiteScenarioRepository, visibility: str
+def test_repository_implementations_match_protocol_signatures() -> None:
+    methods = (
+        "create_scenario",
+        "update_scenario",
+        "get_scenario",
+        "list_scenarios",
+        "delete_scenario",
+        "archive_scenario",
+        "copy_scenario",
+    )
+    for method_name in methods:
+        expected = inspect.signature(getattr(ScenarioRepository, method_name))
+        assert inspect.signature(getattr(SQLiteScenarioRepository, method_name)) == expected
+        assert inspect.signature(getattr(SqlServerScenarioRepository, method_name)) == expected
+
+
+def test_create_always_persists_private_visibility(
+    repository: SQLiteScenarioRepository,
 ) -> None:
-    source = scenario_record(visibility=visibility)
+    source = scenario_record(visibility="shared")
     created = repository.create_scenario(source, [change_record(source.scenario_id)])
-    assert created.visibility == visibility
+    assert created.visibility == "private"
     assert created.row_version == 1
 
 
-def test_private_and_shared_read_access(repository: SQLiteScenarioRepository) -> None:
+def test_private_and_legacy_shared_scenarios_are_owner_only(
+    repository: SQLiteScenarioRepository,
+) -> None:
     private = scenario_record()
     shared = scenario_record(visibility="shared")
     repository.create_scenario(private, [])
     repository.create_scenario(shared, [])
+    with sqlite3.connect(repository.database_path) as connection:
+        connection.execute(
+            "UPDATE scenario_header SET visibility = 'shared' WHERE scenario_id = ?",
+            (shared.scenario_id,),
+        )
     assert repository.get_scenario(private.scenario_id, "user.one")[0].scenario_id == private.scenario_id
     with pytest.raises(AuthorizationError):
         repository.get_scenario(private.scenario_id, "user.two")
-    assert repository.get_scenario(shared.scenario_id, "user.two")[0].scenario_id == shared.scenario_id
+    assert repository.get_scenario(shared.scenario_id, "user.one")[0].scenario_id == shared.scenario_id
+    with pytest.raises(AuthorizationError):
+        repository.get_scenario(shared.scenario_id, "user.two")
 
 
 def test_owner_update_and_stale_version(repository: SQLiteScenarioRepository) -> None:
     source = scenario_record()
     created = repository.create_scenario(source, [])
-    updated_input = replace(created, scenario_name="نام جدید")
-    updated = repository.update_scenario(updated_input, [], expected_row_version=1)
+    updated_input = replace(created, scenario_name="نام جدید", visibility="shared")
+    updated = repository.update_scenario(
+        updated_input, [], expected_row_version=1, requesting_user_id="user.one"
+    )
     assert updated.scenario_name == "نام جدید"
+    assert updated.visibility == "private"
     assert updated.row_version == 2
     with pytest.raises(ConcurrencyError):
-        repository.update_scenario(updated, [], expected_row_version=1)
+        repository.update_scenario(
+            updated, [], expected_row_version=1, requesting_user_id="user.one"
+        )
+
+
+def test_non_owner_cannot_update_even_with_forged_owner_record(
+    repository: SQLiteScenarioRepository,
+) -> None:
+    created = repository.create_scenario(scenario_record(), [])
+    with pytest.raises(AuthorizationError):
+        repository.update_scenario(
+            replace(created, scenario_name="ویرایش غیرمجاز"),
+            [],
+            expected_row_version=1,
+            requesting_user_id="user.two",
+        )
+
+
+def test_list_query_filters_by_owner_in_sql(repository: SQLiteScenarioRepository) -> None:
+    own = repository.create_scenario(scenario_record(owner="user.one"), [])
+    repository.create_scenario(scenario_record(owner="user.two"), [])
+    listed = repository.list_scenarios("user.one")
+    assert [item.scenario_id for item in listed] == [own.scenario_id]
 
 
 def test_owner_archive_and_delete_and_non_owner_denied(
@@ -124,21 +176,30 @@ def test_owner_archive_and_delete_and_non_owner_denied(
         repository.get_scenario(first.scenario_id, "user.one")
 
 
-def test_copy_shared_scenario_is_new_private_scenario(
+def test_non_owner_cannot_copy_legacy_shared_scenario(
     repository: SQLiteScenarioRepository,
 ) -> None:
     source = scenario_record(visibility="shared", status="executed")
     repository.create_scenario(
         source, [change_record(source.scenario_id)], [result_record(source.scenario_id)]
     )
+    with sqlite3.connect(repository.database_path) as connection:
+        connection.execute(
+            "UPDATE scenario_header SET visibility = 'shared' WHERE scenario_id = ?",
+            (source.scenario_id,),
+        )
+    with pytest.raises(AuthorizationError):
+        repository.copy_scenario(
+            source.scenario_id, "user.two", "کاربر دو", "نسخه کاربر دو"
+        )
     copied = repository.copy_scenario(
-        source.scenario_id, "user.two", "کاربر دو", "نسخه کاربر دو"
+        source.scenario_id, "user.one", "کاربر یک", "نسخه کاربر یک"
     )
     assert copied.scenario_id != source.scenario_id
-    assert copied.owner_user_id == "user.two"
+    assert copied.owner_user_id == "user.one"
     assert copied.visibility == "private"
-    loaded, changes, results = repository.get_scenario(copied.scenario_id, "user.two")
-    assert loaded.scenario_name == "نسخه کاربر دو"
+    loaded, changes, results = repository.get_scenario(copied.scenario_id, "user.one")
+    assert loaded.scenario_name == "نسخه کاربر یک"
     assert len(changes) == 1
     assert len(results) == 1
 
@@ -218,6 +279,7 @@ def test_list_query_loads_headers_only(tmp_path: Path) -> None:
     assert len(listed) == 1
     select_queries = [query.lower() for query in repository.queries if query.lstrip().lower().startswith("select")]
     assert select_queries
+    assert any("owner_user_id = 'user.one'" in query for query in select_queries)
     assert all("scenario_change" not in query for query in select_queries)
     assert all("scenario_result_summary" not in query for query in select_queries)
 
@@ -228,10 +290,11 @@ def test_audit_log_records_lifecycle_actions(
     source = scenario_record(visibility="shared")
     created = repository.create_scenario(source, [])
     updated = repository.update_scenario(
-        replace(created, scenario_name="ویرایش‌شده"), [], expected_row_version=1
+        replace(created, scenario_name="ویرایش‌شده"), [], expected_row_version=1,
+        requesting_user_id="user.one",
     )
     copied = repository.copy_scenario(
-        updated.scenario_id, "user.two", "کاربر دو", "کپی"
+        updated.scenario_id, "user.one", "کاربر یک", "کپی"
     )
     archived = repository.archive_scenario(updated.scenario_id, "user.one", 2)
     repository.delete_scenario(archived.scenario_id, "user.one", 3)
@@ -261,9 +324,36 @@ def test_local_user_config_loads(tmp_path: Path) -> None:
     assert user.roles == ("branch_user",)
 
 
+def test_local_user_config_supports_assigned_branch(tmp_path: Path) -> None:
+    path = tmp_path / "branch-user.json"
+    path.write_text(
+        json.dumps(
+            {
+                "user_id": "branch.user",
+                "display_name": "کاربر شعبه",
+                "roles": ["branch_user"],
+                "branch_id": "00101",
+                "branch_code": "101",
+                "branch_name": "شعبه مرکزی",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    user = load_current_user(path)
+    assert (user.branch_id, user.branch_code, user.branch_name) == (
+        "00101",
+        "101",
+        "شعبه مرکزی",
+    )
+
+
 def test_project_local_user_config_loads() -> None:
     root = Path(__file__).resolve().parents[1]
     user = load_current_user(root / "config" / "local_user.json")
     assert user.user_id == "demo.user"
     assert user.display_name == "کاربر آزمایشی"
     assert "branch_user" in user.roles
+    assert user.branch_id == "2001"
+    assert user.branch_code == "2001"
+    assert user.branch_name == "خیابان امام زنجان"

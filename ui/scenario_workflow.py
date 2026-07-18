@@ -11,6 +11,7 @@ from typing import Any, Final
 import pandas as pd
 
 from engine.comparison_engine import ScenarioComparison, compare_model_outputs
+from engine.indicator_registry import INDICATOR_REGISTRY
 from engine.ranking_engine import (
     BRANCH_ID,
     BRANCH_NAME,
@@ -21,14 +22,7 @@ from engine.ranking_engine import (
 from engine.scenario_engine import ScenarioChange, apply_scenario_changes, build_scenario_changes
 
 INDICATOR_LABELS: Final[dict[str, str]] = {
-    "deposit_count": "تعداد سپرده‌ها",
-    "avg_deposits": "میانگین سپرده‌ها",
-    "loan_count": "تعداد تسهیلات",
-    "avg_loans": "میانگین تسهیلات",
-    "commitment_count": "تعداد تعهدات",
-    "avg_commitments": "میانگین تعهدات",
-    "transaction_volume": "حجم عملیات",
-    "profit_loss": "سود و زیان",
+    key: definition.display_name for key, definition in INDICATOR_REGISTRY.items()
 }
 INDICATOR_ORDER: Final[tuple[str, ...]] = tuple(INDICATOR_LABELS)
 EDIT_MODES: Final[tuple[str, ...]] = ("percent", "direct")
@@ -43,8 +37,18 @@ NETWORK_FILTERS: Final[tuple[str, ...]] = (
 
 SCENARIO_RESET_VALUES: Final[dict[str, Any]] = {
     "scenario_name": "",
+    "selection_scope": "SELECTED_BRANCHES",
+    "scenario_mode": "ONLY_USER_BRANCH",
+    "focus_branch_id": None,
+    "focus_branch_source": None,
     "selected_regions": [],
-    "selected_branches": [],
+    "selected_branch_ids": [],
+    "scenario_definition": {},
+    "manual_override_rows": [],
+    "manual_override_groups": [],
+    "focus_branch_override_rows": [],
+    "focus_branch_overrides": [],
+    "branch_exception_groups": {},
     "scenario_changes": [],
     "scenario_dataframe": None,
     "scenario_results": None,
@@ -69,6 +73,27 @@ class ScenarioExecution:
     scenario_dataframe: pd.DataFrame
     scenario_outputs: ModelOutputs
     comparison_results: ScenarioComparison
+
+
+def execute_generated_changes(
+    baseline_df: pd.DataFrame,
+    baseline_outputs: ModelOutputs,
+    changes: list[ScenarioChange],
+    scenario_name: str,
+    selected_branch_ids: list[str],
+) -> ScenarioExecution:
+    """Execute already validated generated changes against the full bank."""
+    if not scenario_name.strip():
+        raise ValueError("نام سناریو نمی‌تواند خالی باشد.")
+    if not selected_branch_ids:
+        raise ValueError("حداقل یک شعبه را انتخاب کنید.")
+    selected = set(map(str, selected_branch_ids))
+    if any(str(change.branch_id) not in selected for change in changes):
+        raise ValueError("تغییر سناریو خارج از دامنه شعب منتخب است.")
+    scenario_df = apply_scenario_changes(baseline_df.copy(deep=True), changes)
+    scenario_outputs = run_ranking_model(scenario_df)
+    comparison = compare_model_outputs(baseline_outputs, scenario_outputs)
+    return ScenarioExecution(changes, scenario_df, scenario_outputs, comparison)
 
 
 def calculate_scenario_value(
@@ -163,7 +188,8 @@ def build_scenario_changes_from_editor_state(
     for row in synchronized.values():
         indicator_key = str(row["indicator_key"])
         scenario_value = float(row["scenario_value"])
-        if scenario_value < 0 and indicator_key != "profit_loss":
+        minimum = INDICATOR_REGISTRY[indicator_key].minimum_value
+        if minimum is not None and scenario_value < minimum:
             raise ValueError(
                 f"مقدار منفی فقط برای سود و زیان مجاز است؛ شاخص «{INDICATOR_LABELS[indicator_key]}» نامعتبر است."
             )
@@ -440,17 +466,33 @@ def reset_scenario_state(state: MutableMapping[str, Any]) -> None:
     """Clear scenario artifacts and widget state while retaining baseline cache."""
     for key, value in SCENARIO_RESET_VALUES.items():
         state[key] = value.copy() if isinstance(value, list) else value
+    state.pop("selected_branches", None)
     for key in (
         "_scenario_name_input",
+        "_selection_scope_input",
+        "_selected_regions_input",
+        "_selected_branch_ids_input",
         "_selected_region_input",
         "_selected_branches_input",
         "_editor_branches",
         "_network_filter",
-        "_scenario_visibility",
     ):
         state.pop(key, None)
     widget_suffixes = ("_edit_mode", "_change_percent", "_scenario_value")
     for key in list(state):
+        if str(key).startswith(
+            (
+                "override_branch_",
+                "override_indicator_",
+                "override_operation_",
+                "override_value_",
+                "override_delete_",
+                "user_override_operation_",
+                "user_override_value_",
+            )
+        ):
+            state.pop(key, None)
+            continue
         if str(key).startswith("scenario_") and str(key).endswith(widget_suffixes):
             state.pop(key, None)
     state["editor_version"] = int(state.get("editor_version", 0)) + 1

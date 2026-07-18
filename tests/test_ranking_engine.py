@@ -18,12 +18,11 @@ from engine.validation import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_engine_matches_current_output_workbook(input_df: pd.DataFrame) -> None:
+def test_unaffected_engine_columns_match_current_output_workbook(input_df: pd.DataFrame) -> None:
     actual = run_ranking_model(input_df)
     expected = {
         sheet: pd.read_excel(ROOT / "Branch_Ranking_New_Model.xlsx", sheet_name=sheet)
         for sheet in [
-            "Final_Result",
             "Weighted_Matrix",
             "Normalized_Scores",
             "Log_Values",
@@ -32,7 +31,6 @@ def test_engine_matches_current_output_workbook(input_df: pd.DataFrame) -> None:
         ]
     }
     actual_sheets = {
-        "Final_Result": actual.final_result,
         "Weighted_Matrix": actual.weighted_matrix,
         "Normalized_Scores": actual.normalized_scores,
         "Log_Values": actual.log_values,
@@ -45,13 +43,21 @@ def test_engine_matches_current_output_workbook(input_df: pd.DataFrame) -> None:
         if "branch_id" in frame:
             frame["branch_id"] = frame["branch_id"].astype(str)
     for sheet, actual_frame in actual_sheets.items():
+        expected_frame = expected[sheet]
+        if sheet in {"Weighted_Matrix", "Normalized_Scores", "Log_Values"}:
+            actual_frame = actual_frame.drop(columns="profit_loss")
+            expected_frame = expected_frame.drop(columns="profit_loss")
         assert_frame_equal(
             actual_frame.reset_index(drop=True),
-            expected[sheet].reset_index(drop=True),
+            expected_frame.reset_index(drop=True),
             check_dtype=False,
             rtol=1e-12,
             atol=1e-12,
         )
+
+    assert set(actual.final_result["branch_id"]) == set(
+        expected["Weighted_Matrix"]["branch_id"]
+    )
 
 
 def test_final_scores_are_in_range(input_df: pd.DataFrame) -> None:

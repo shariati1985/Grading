@@ -64,7 +64,7 @@ def apply_global_styles() -> None:
         .page-subtitle { color: var(--muted); font-size: 15px; line-height: 1.9;
             margin: -.15rem 0 .9rem; max-width: 920px; }
 
-        /* Fixed custom right navigation; the native auto-generated menu stays hidden. */
+        /* Desktop navigation occupies its own reserved layout space. */
         [data-testid="stSidebar"] {
             position: fixed !important;
             right: 0 !important;
@@ -193,6 +193,19 @@ def apply_global_styles() -> None:
         [data-testid="stDecoration"] { display: none !important; }
 
         @media (max-width: 1100px) {
+            [data-testid="stAppViewContainer"] > .main {
+                margin-right: 0 !important;
+                width: 100% !important;
+            }
+            [data-testid="stSidebar"] {
+                position: relative !important;
+                width: min(100%, 420px) !important;
+                min-width: 0 !important;
+                height: auto !important;
+                border-left: 0;
+                box-shadow: none;
+            }
+            [data-testid="stSidebar"] > div { width: 100% !important; }
             [data-testid="stMainBlockContainer"] { padding-inline: 1rem; }
             [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: 12px; }
             [data-testid="column"] { min-width: min(100%, 300px) !important; flex: 1 1 300px !important; }

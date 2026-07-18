@@ -37,6 +37,8 @@ class ScenarioRepository(Protocol):
         changes: list[ScenarioChangeRecord],
         expected_row_version: int,
         result_summaries: list[ScenarioResultSummary] | None = None,
+        *,
+        requesting_user_id: str,
     ) -> ScenarioRecord: ...
 
     def get_scenario(
@@ -46,7 +48,6 @@ class ScenarioRepository(Protocol):
     def list_scenarios(
         self,
         requesting_user_id: str,
-        include_shared: bool = True,
         status: str | None = None,
         *,
         search: str | None = None,

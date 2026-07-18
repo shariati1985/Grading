@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from engine.comparison_engine import ScenarioComparison
+from engine.indicator_registry import INDICATOR_REGISTRY, validate_indicator_value
 from engine.scenario_engine import ScenarioChange
 from persistence.contracts import AuthorizationError, ScenarioRepository
 from persistence.models import ScenarioChangeRecord, ScenarioRecord, ScenarioResultSummary
@@ -16,7 +17,6 @@ from persistence.models import ScenarioChangeRecord, ScenarioRecord, ScenarioRes
 from .user_context import CurrentUser
 
 ALLOWED_STATUSES = frozenset({"draft", "executed", "archived"})
-ALLOWED_VISIBILITIES = frozenset({"private", "shared"})
 ALLOWED_EDIT_MODES = frozenset({"percent", "direct"})
 
 
@@ -39,14 +39,12 @@ class ScenarioManagementService:
         self.weights_version = weights_version
 
     @staticmethod
-    def _validate(name: str, status: str, visibility: str) -> str:
+    def _validate(name: str, status: str) -> str:
         cleaned_name = name.strip()
         if not cleaned_name:
             raise ValueError("نام سناریو نمی‌تواند خالی باشد.")
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"وضعیت سناریو نامعتبر است: {status}")
-        if visibility not in ALLOWED_VISIBILITIES:
-            raise ValueError(f"سطح دسترسی سناریو نامعتبر است: {visibility}")
         return cleaned_name
 
     @staticmethod
@@ -59,6 +57,18 @@ class ScenarioManagementService:
         invalid_modes = set(modes.values()) - ALLOWED_EDIT_MODES
         if invalid_modes:
             raise ValueError(f"روش ویرایش نامعتبر است: {sorted(invalid_modes)[0]}")
+        for item in changes:
+            code = validate_indicator_value(item.indicator_key, item.scenario_value)
+            if code is not None:
+                name = INDICATOR_REGISTRY.get(item.indicator_key)
+                label = name.display_name if name else item.indicator_key
+                raise ValueError(
+                    f"مقدار نهایی شاخص «{label}» برای شعبه «{item.branch_name}» معتبر نیست ({code})."
+                )
+            if not math.isfinite(float(item.baseline_value)):
+                raise ValueError(
+                    f"مقدار مبنای شاخص «{item.indicator_key}» برای شعبه «{item.branch_name}» معتبر نیست."
+                )
         return [
             ScenarioChangeRecord(
                 scenario_id=scenario_id,
@@ -106,7 +116,6 @@ class ScenarioManagementService:
         *,
         scenario_name: str,
         baseline_period: str,
-        visibility: str,
         status: str,
         selected_branch_ids: list[str],
         changes: list[ScenarioChange],
@@ -117,7 +126,7 @@ class ScenarioManagementService:
         save_as_new: bool,
         edit_modes: dict[str, str] | None,
     ) -> ScenarioRecord:
-        name = self._validate(scenario_name, status, visibility)
+        name = self._validate(scenario_name, status)
         branch_ids = list(dict.fromkeys(map(str, selected_branch_ids)))
         scenario_summary = dict(summary or {})
         scenario_summary.setdefault("selected_branch_count", len(branch_ids))
@@ -144,7 +153,7 @@ class ScenarioManagementService:
                 owner_user_id=self.current_user.user_id,
                 owner_display_name=self.current_user.display_name,
                 status=status,
-                visibility=visibility,
+                visibility="private",
                 model_version=self.model_version,
                 weights_version=self.weights_version,
                 created_at=now,
@@ -167,14 +176,18 @@ class ScenarioManagementService:
             scenario_name=name,
             baseline_period=baseline_period,
             status=status,
-            visibility=visibility,
+            visibility="private",
             model_version=self.model_version,
             weights_version=self.weights_version,
             selected_branch_ids=branch_ids,
             summary=scenario_summary,
         )
         return self.repository.update_scenario(
-            updated, change_records, expected_row_version, results
+            updated,
+            change_records,
+            expected_row_version,
+            results,
+            requesting_user_id=self.current_user.user_id,
         )
 
     def save_draft(
@@ -182,7 +195,6 @@ class ScenarioManagementService:
         *,
         scenario_name: str,
         baseline_period: str,
-        visibility: str,
         selected_branch_ids: list[str],
         changes: list[ScenarioChange],
         summary: dict[str, Any] | None = None,
@@ -194,7 +206,6 @@ class ScenarioManagementService:
         return self._save(
             scenario_name=scenario_name,
             baseline_period=baseline_period,
-            visibility=visibility,
             status="draft",
             selected_branch_ids=selected_branch_ids,
             changes=changes,
@@ -211,7 +222,6 @@ class ScenarioManagementService:
         *,
         scenario_name: str,
         baseline_period: str,
-        visibility: str,
         selected_branch_ids: list[str],
         changes: list[ScenarioChange],
         comparison: ScenarioComparison,
@@ -224,7 +234,6 @@ class ScenarioManagementService:
         return self._save(
             scenario_name=scenario_name,
             baseline_period=baseline_period,
-            visibility=visibility,
             status="executed",
             selected_branch_ids=selected_branch_ids,
             changes=changes,
@@ -296,7 +305,6 @@ class ScenarioManagementService:
     ) -> list[ScenarioRecord]:
         return self.repository.list_scenarios(
             self.current_user.user_id,
-            include_shared=True,
             status=status,
             search=search,
             limit=limit,

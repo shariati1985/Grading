@@ -6,10 +6,14 @@ import pandas as pd
 import pytest
 
 from engine.ranking_engine import run_ranking_model
+from services.user_context import load_current_user
+from services.selection_scope import SelectionResolver, SelectionScope
+from pathlib import Path
 from ui.scenario_workflow import (
     INDICATOR_ORDER,
     build_editor_data,
     execute_scenario,
+    execute_generated_changes,
     filter_network_impact,
     reset_scenario_state,
     selected_branch_results,
@@ -68,6 +72,49 @@ def test_selected_branch_result_mapping_preserves_selection(input_df: pd.DataFra
     assert {"baseline_score", "scenario_score", "rank_change"}.issubset(selected.columns)
 
 
+def test_generated_rule_changes_keep_full_bank_calculation_universe(
+    input_df: pd.DataFrame,
+) -> None:
+    baseline_outputs = run_ranking_model(input_df)
+    branch_id = str(input_df.iloc[0]["branch_id"])
+    current = float(input_df.iloc[0]["avg_deposits"])
+    from engine.scenario_engine import ScenarioChange
+
+    change = ScenarioChange(
+        branch_id,
+        str(input_df.iloc[0]["branch_name"]),
+        "avg_deposits",
+        current,
+        current + 1,
+        1,
+        1 / current * 100 if current else float("nan"),
+    )
+    execution = execute_generated_changes(
+        input_df, baseline_outputs, [change], "قانون گروهی", [branch_id]
+    )
+    assert len(execution.scenario_outputs.final_result) == len(input_df)
+    assert {item.branch_id for item in execution.changes} == {branch_id}
+    pd.testing.assert_frame_equal(input_df, baseline_outputs.raw_data)
+
+
+def test_demo_zanjan_change_still_reranks_full_bank(input_df: pd.DataFrame) -> None:
+    root = Path(__file__).resolve().parents[1]
+    demo_user = load_current_user(root / "config" / "local_user.json")
+    selected = SelectionResolver.resolve(
+        SelectionScope.USER_BRANCH, input_df, demo_user
+    )
+    baseline_outputs = run_ranking_model(input_df)
+    editor = build_editor_data(input_df, selected)
+    target = editor["indicator_key"].eq("avg_deposits")
+    editor.loc[target, "scenario_value"] = editor.loc[target, "baseline_value"] * 1.01
+    execution = execute_scenario(
+        input_df, baseline_outputs, editor, "آزمون شعبه زنجان", selected
+    )
+    assert selected == ["2001"]
+    assert {change.branch_id for change in execution.changes} == {"2001"}
+    assert len(execution.scenario_outputs.final_result) == len(input_df)
+
+
 def test_rank_improvement_sign_is_positive(input_df: pd.DataFrame) -> None:
     baseline_outputs = run_ranking_model(input_df)
     branch_id = baseline_outputs.final_result.iloc[-1]["branch_id"]
@@ -102,8 +149,8 @@ def test_reset_state_helper_preserves_baseline_outputs() -> None:
         "scenario_name": "فعال",
         "scenario_executed": True,
         "scenario_dataframe": object(),
-        "selected_branches": ["101"],
-        "_selected_branches_input": ["101"],
+        "selected_branch_ids": ["101"],
+        "_selected_branch_ids_input": ["101"],
         "editor_version": 4,
     }
     reset_scenario_state(state)
@@ -111,8 +158,8 @@ def test_reset_state_helper_preserves_baseline_outputs() -> None:
     assert state["scenario_name"] == ""
     assert state["scenario_executed"] is False
     assert state["scenario_dataframe"] is None
-    assert state["selected_branches"] == []
-    assert "_selected_branches_input" not in state
+    assert state["selected_branch_ids"] == []
+    assert "_selected_branch_ids_input" not in state
     assert state["editor_version"] == 5
 
 

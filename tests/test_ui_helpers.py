@@ -44,10 +44,17 @@ def test_session_state_initializer_is_complete_and_non_destructive() -> None:
     initialized = initialize_session_state(state)
     assert set(SESSION_DEFAULTS).issubset(initialized)
     assert initialized["scenario_name"] == "سناریوی موجود"
-    initialized["selected_branches"].append("101")  # type: ignore[union-attr]
+    initialized["selected_branch_ids"].append("101")  # type: ignore[union-attr]
     second: dict[str, object] = {}
     initialize_session_state(second)
-    assert second["selected_branches"] == []
+    assert second["selected_branch_ids"] == []
+
+
+def test_legacy_selected_branches_session_key_is_migrated() -> None:
+    state: dict[str, object] = {"selected_branches": ["101", "202"]}
+    initialize_session_state(state)
+    assert state["selected_branch_ids"] == ["101", "202"]
+    assert "selected_branches" not in state
 
 
 def test_dashboard_loads_repository_data_and_model_outputs() -> None:

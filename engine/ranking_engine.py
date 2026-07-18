@@ -15,6 +15,7 @@ import pandas as pd
 
 from data.contracts import CANONICAL_COLUMNS
 from data.excel_repository import normalize_text
+from engine.indicator_registry import PROFIT_LOSS_KEY
 
 BRANCH_ID: Final[str] = "branch_id"
 BRANCH_NAME: Final[str] = "branch_name"
@@ -98,6 +99,11 @@ def _apply_log_transform(raw_data: pd.DataFrame) -> pd.DataFrame:
     result = raw_data[list(IDENTITY_COLUMNS)].copy()
     for column in INDICATOR_KEYS:
         series = raw_data[column].astype(float)
+        if column == PROFIT_LOSS_KEY:
+            # Preserve signed financial direction. A shifted logarithm compresses
+            # extreme losses and can make them appear near-best on a 1–1000 scale.
+            result[column] = series
+            continue
         minimum = float(series.min())
         shift = abs(minimum) + 1.0 if minimum < 0 else 1.0
         result[column] = np.log(series + shift)
