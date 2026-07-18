@@ -1,9 +1,0 @@
-﻿indicator_key,indicator_name,weight,indicator_type,indicator_order
-avg_deposits,Average Deposits,0.5,benefit,1
-deposit_count,Deposit Count,0.005,benefit,2
-avg_loans,Average Loans,0.26,benefit,3
-loan_count,Loan Count,0.01,benefit,4
-avg_commitments,Average Commitments,0.17,benefit,5
-commitment_count,Commitment Count,0.01,benefit,6
-transaction_volume,Transaction Volume,0.015,benefit,7
-profit_loss,Profit / Loss,0.03,benefit,8
