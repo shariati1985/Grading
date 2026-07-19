@@ -23,6 +23,7 @@ def test_unaffected_engine_columns_match_current_output_workbook(input_df: pd.Da
     expected = {
         sheet: pd.read_excel(ROOT / "Branch_Ranking_New_Model.xlsx", sheet_name=sheet)
         for sheet in [
+            "Final_Result",
             "Weighted_Matrix",
             "Normalized_Scores",
             "Log_Values",
@@ -31,6 +32,7 @@ def test_unaffected_engine_columns_match_current_output_workbook(input_df: pd.Da
         ]
     }
     actual_sheets = {
+        "Final_Result": actual.final_result,
         "Weighted_Matrix": actual.weighted_matrix,
         "Normalized_Scores": actual.normalized_scores,
         "Log_Values": actual.log_values,
@@ -44,9 +46,6 @@ def test_unaffected_engine_columns_match_current_output_workbook(input_df: pd.Da
             frame["branch_id"] = frame["branch_id"].astype(str)
     for sheet, actual_frame in actual_sheets.items():
         expected_frame = expected[sheet]
-        if sheet in {"Weighted_Matrix", "Normalized_Scores", "Log_Values"}:
-            actual_frame = actual_frame.drop(columns="profit_loss")
-            expected_frame = expected_frame.drop(columns="profit_loss")
         assert_frame_equal(
             actual_frame.reset_index(drop=True),
             expected_frame.reset_index(drop=True),
@@ -90,6 +89,7 @@ def test_indicator_ranks_cover_all_branches_and_indicators(input_df: pd.DataFram
         "region",
         "indicator_key",
         "raw_value",
+        "shifted_value",
         "log_value",
         "score",
         "weighted_score",

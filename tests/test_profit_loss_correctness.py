@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+import pytest
 
-from engine.ranking_engine import run_ranking_model
+from engine.ranking_engine import WEIGHTS, run_ranking_model
 from engine.diagnostics import build_profit_loss_diagnostics
 
 
@@ -92,8 +94,37 @@ def test_displayed_score_is_normalized_not_weighted(input_df) -> None:
     )
 
 
-def test_signed_profit_loss_is_not_transformed_with_absolute_value(input_df) -> None:
-    outputs = run_ranking_model(_otherwise_identical(input_df, [-500.0, 500.0]))
-    diagnostic = build_profit_loss_diagnostics(outputs, outputs).set_index("branch_id")
-    assert diagnostic.loc["1", "normalized_profit_loss_score"] == 1.0
-    assert diagnostic.loc["2", "normalized_profit_loss_score"] == 1000.0
+def test_profit_loss_uses_official_shift_log_normalization(input_df) -> None:
+    outputs = run_ranking_model(input_df)
+    raw = outputs.raw_data["profit_loss"]
+    shifted = raw + abs(float(raw.min())) + 1.0
+    logs = np.log(shifted)
+    expected_scores = ((logs - logs.min()) / (logs.max() - logs.min())) * 999.0 + 1.0
+
+    pd.testing.assert_series_equal(
+        outputs.shifted_values["profit_loss"], shifted, check_names=False
+    )
+    pd.testing.assert_series_equal(outputs.log_values["profit_loss"], logs, check_names=False)
+    pd.testing.assert_series_equal(
+        outputs.normalized_scores["profit_loss"], expected_scores, check_names=False
+    )
+    assert outputs.shifted_values["profit_loss"].gt(0).all()
+
+
+def test_fatemi_official_profit_loss_trace(input_df) -> None:
+    outputs = run_ranking_model(input_df)
+    fatemi = outputs.indicator_results.loc[
+        outputs.indicator_results["branch_id"].eq("103")
+        & outputs.indicator_results["indicator_key"].eq("profit_loss")
+    ].iloc[0]
+    assert fatemi["shifted_value"] > 0
+    assert fatemi["log_value"] == pytest.approx(np.log(fatemi["shifted_value"]), abs=1e-12)
+    assert fatemi["score"] == pytest.approx(856.7019931, abs=1e-6)
+    assert fatemi["weighted_score"] == pytest.approx(
+        fatemi["score"] * WEIGHTS["profit_loss"], abs=1e-10
+    )
+    profit = outputs.indicator_results.loc[
+        outputs.indicator_results["indicator_key"].eq("profit_loss")
+    ]
+    expected_rank = int(profit["score"].rank(method="first", ascending=False).loc[fatemi.name])
+    assert fatemi["indicator_rank"] == expected_rank == 222
