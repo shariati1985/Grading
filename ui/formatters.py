@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 GRADE_LABELS: dict[str, str] = {
     "Excellent Plus": "ممتاز ویژه",
@@ -35,6 +36,43 @@ def format_score(value: object) -> str:
 def format_raw_value(value: object) -> str:
     """Format monetary, volume, and count values without immaterial decimals."""
     return format_number(value, decimals=0)
+
+
+def format_compact_number(value: object, max_decimals: int = 4) -> str:
+    """Group large values while retaining only meaningful decimal places."""
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    rendered = f"{number:,.{max_decimals}f}"
+    return rendered.rstrip("0").rstrip(".")
+
+
+def format_managerial_number(value: object) -> str:
+    """Abbreviate large card values while keeping exact values in details/tooltips."""
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    for threshold, label in ((1e12, "تریلیون"), (1e9, "میلیارد"), (1e6, "میلیون")):
+        if abs(number) >= threshold:
+            return f"{number / threshold:,.1f} {label}"
+    return format_number(number, decimals=1).rstrip("0").rstrip(".")
+
+
+def format_editable_number(value: object) -> str:
+    """Format an editable numeric value with separators and stable precision."""
+    return format_compact_number(value, max_decimals=6)
+
+
+def parse_formatted_number(value: object) -> float:
+    """Parse grouped Latin/Persian numeric input into a finite float."""
+    translation = str.maketrans("۰۱۲۳۴۵۶۷۸۹٫−", "0123456789.-")
+    text = str(value).translate(translation).replace("٬", "").replace(",", "").strip()
+    if not text or not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", text):
+        raise ValueError("مقدار واردشده باید یک عدد معتبر باشد.")
+    number = float(text)
+    if not math.isfinite(number):
+        raise ValueError("مقدار واردشده باید یک عدد متناهی باشد.")
+    return number
 
 
 def format_rank(value: object) -> str:

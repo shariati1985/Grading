@@ -12,7 +12,10 @@ from persistence.contracts import AuthorizationError, ConcurrencyError, Scenario
 from persistence.models import ScenarioRecord
 from services.factory import create_local_scenario_service
 from services.scenario_management_service import ScenarioManagementService
+from services.selection_scope import SelectionScope
+from engine.scenario_rule_engine import RuleOperation
 from ui import initialize_session_state
+from ui.manual_override_state import restore_override_rows
 from ui.components import render_empty_state, render_page_header
 from ui.styles import apply_global_styles
 from ui.tables import render_table
@@ -24,7 +27,6 @@ STATUS_LABELS: Final[dict[str, str]] = {
     "executed": "اجراشده",
     "archived": "بایگانی‌شده",
 }
-VISIBILITY_LABELS: Final[dict[str, str]] = {"private": "شخصی", "shared": "مشترک"}
 
 
 @st.cache_resource
@@ -38,11 +40,157 @@ def _open_in_builder(
     record, changes, _, edit_modes = service.load_scenario_editor(
         scenario.scenario_id
     )
+    definition = dict(record.summary.get("scenario_definition", {}))
+    if not definition:
+        definition = {
+            "schema_version": 0,
+            "selection_scope": "SELECTED_BRANCHES",
+            "selection_inputs": {"selected_branch_ids": list(record.selected_branch_ids)},
+            "bulk_rules": [],
+            "manual_overrides": [
+                {
+                    "branch_id": item.branch_id,
+                    "indicator_key": item.indicator_key,
+                    "operation": RuleOperation.SET_VALUE.value,
+                    "value": item.scenario_value,
+                }
+                for item in changes
+            ],
+            "validation_status": "legacy",
+        }
+
+    widget_state: dict[str, object] = {}
+    for item in definition.get(
+        "network_bulk_rules", definition.get("bulk_rules", [])
+    ):
+        operation = RuleOperation(str(item["operation"]))
+        value = float(item["value"])
+        if operation is RuleOperation.PERCENT_CHANGE:
+            label = "افزایش درصدی" if value >= 0 else "کاهش درصدی"
+            widget_value = abs(value)
+        elif operation is RuleOperation.ABSOLUTE_CHANGE:
+            label = "افزایش عددی" if value >= 0 else "کاهش عددی"
+            widget_value = abs(value)
+        else:
+            label, widget_value = "تعیین مقدار جدید", value
+        widget_state[f"network_{item['indicator_key']}_operation"] = label
+        widget_state[f"network_{item['indicator_key']}_value"] = widget_value
+        widget_state[f"_bulk_operation_{item['indicator_key']}"] = label
+        widget_state[f"_bulk_value_{item['indicator_key']}"] = widget_value
+    saved_focus_id = str(
+        definition.get("focus_branch_id")
+        or (
+            service.current_user.branch_id
+            if service.current_user.branch_id in record.selected_branch_ids
+            else record.selected_branch_ids[0] if record.selected_branch_ids else ""
+        )
+    )
+    saved_focus_source = str(
+        definition.get("focus_branch_source")
+        or (
+            "ASSIGNED_USER_BRANCH"
+            if saved_focus_id == service.current_user.branch_id
+            else "USER_SELECTED_BRANCH"
+        )
+    )
+    manual_items = list(definition.get("manual_overrides", []))
+    if not manual_items:
+        for branch_id, indicators in dict(
+            definition.get("branch_exception_groups", {})
+        ).items():
+            for indicator_key, item in dict(indicators).items():
+                manual_items.append(
+                    {
+                        "branch_id": str(branch_id),
+                        "indicator_key": str(indicator_key),
+                        "operation": item["operation"],
+                        "input_value": item.get("input_value", item.get("value", 0.0)),
+                        "source": "branch_exception",
+                    }
+                )
+    user_items = list(
+        definition.get(
+            "focus_branch_overrides", definition.get("user_branch_overrides", [])
+        )
+    )
+    if not user_items and saved_focus_id:
+        user_items = [
+            item for item in manual_items
+            if str(item.get("branch_id")) == saved_focus_id
+        ]
+        manual_items = [
+            item for item in manual_items
+            if str(item.get("branch_id")) != saved_focus_id
+        ]
+    focus_branch_override_rows = restore_override_rows(
+        user_items, default_source="focus_branch_override"
+    )
+    manual_override_rows = restore_override_rows(manual_items)
+    manual_override_groups: list[dict[str, str]] = []
+    seen_groups: set[str] = set()
+    for item in manual_override_rows:
+        if item["group_id"] not in seen_groups:
+            manual_override_groups.append(
+                {"group_id": item["group_id"], "branch_id": item["branch_id"]}
+            )
+            seen_groups.add(item["group_id"])
+
+    try:
+        saved_scope = SelectionScope(str(definition.get("selection_scope")))
+    except ValueError:
+        saved_scope = SelectionScope.SELECTED_BRANCHES
+    selection_inputs = dict(definition.get("selection_inputs", {}))
+    saved_regions = list(selection_inputs.get("selected_regions", []))
+
+    for key in list(st.session_state):
+        if str(key).startswith(
+            (
+                "override_branch_",
+                "override_indicator_",
+                "override_operation_",
+                "override_value_",
+                "override_delete_",
+                "user_override_operation_",
+                "user_override_value_",
+                "focus_",
+                "exception_",
+                "network_",
+            )
+        ):
+            st.session_state.pop(key, None)
+
     st.session_state.update(
         {
             "scenario_name": record.scenario_name,
-            "selected_regions": [],
-            "selected_branches": list(record.selected_branch_ids),
+            "selection_scope": saved_scope.value,
+            "selected_regions": saved_regions,
+            "selected_branch_ids": list(record.selected_branch_ids),
+            "scenario_definition": definition,
+            "focus_branch_id": saved_focus_id or None,
+            "focus_branch_source": saved_focus_source if saved_focus_id else None,
+            "manual_override_rows": manual_override_rows,
+            "manual_override_groups": manual_override_groups,
+            "focus_branch_override_rows": focus_branch_override_rows,
+            "focus_branch_overrides": focus_branch_override_rows,
+            "branch_exception_groups": {
+                group["branch_id"]: {
+                    row["indicator_key"]: {
+                        "operation": row["operation"],
+                        "input_value": row["input_value"],
+                    }
+                    for row in manual_override_rows
+                    if row["group_id"] == group["group_id"]
+                }
+                for group in manual_override_groups
+            },
+            "scenario_mode": str(
+                definition.get(
+                    "scenario_mode",
+                    "ONLY_USER_BRANCH"
+                    if record.selected_branch_ids == [service.current_user.branch_id]
+                    else "USER_AND_OTHERS",
+                )
+            ),
             "scenario_changes": changes,
             "scenario_dataframe": None,
             "scenario_results": None,
@@ -58,10 +206,29 @@ def _open_in_builder(
             "indicator_editor_state": {},
             "_editor_branches": None,
             "_scenario_name_input": record.scenario_name,
-            "_selected_region_input": "همه مناطق",
-            "_selected_branches_input": list(record.selected_branch_ids),
-            "_scenario_visibility": record.visibility,
+            "_focus_branch_input": saved_focus_id or None,
+            "_selection_scope_input": saved_scope,
+            "_scenario_mode_input": str(
+                definition.get(
+                    "scenario_mode",
+                    "ONLY_USER_BRANCH"
+                    if record.selected_branch_ids == [service.current_user.branch_id]
+                    else "USER_AND_OTHERS",
+                )
+            ),
+            "_other_selection_scope_input": (
+                saved_scope
+                if saved_scope in {
+                    SelectionScope.SELECTED_BRANCHES,
+                    SelectionScope.SELECTED_REGIONS,
+                    SelectionScope.ALL_BRANCHES,
+                }
+                else SelectionScope.SELECTED_BRANCHES
+            ),
+            "_selected_regions_input": saved_regions,
+            "_selected_branch_ids_input": list(record.selected_branch_ids),
             "editor_version": st.session_state.get("editor_version", 0) + 1,
+            **widget_state,
         }
     )
     st.switch_page("pages/2_Scenario_Builder.py")
@@ -75,7 +242,6 @@ def _headers_table(records: list[ScenarioRecord]) -> pd.DataFrame:
                 "مالک": item.owner_display_name,
                 "دوره": item.baseline_period,
                 "وضعیت": STATUS_LABELS[item.status],
-                "سطح دسترسی": VISIBILITY_LABELS[item.visibility],
                 "تعداد شعب تغییریافته": int(
                     item.summary.get("changed_branch_count", len(item.selected_branch_ids))
                 ),
@@ -103,7 +269,7 @@ def main() -> None:
     apply_global_styles()
     render_page_header(
         "سناریوهای ذخیره‌شده",
-        "مدیریت سناریوهای شخصی و سناریوهای مشترک قابل مشاهده",
+        "مدیریت سناریوهای شخصی ذخیره‌شده",
     )
     try:
         service = get_scenario_service(ROOT)
@@ -144,7 +310,6 @@ def main() -> None:
 
         st.subheader("عملیات سناریو")
         for item in records:
-            owner = item.owner_user_id == service.current_user.user_id
             with st.expander(
                 f"{item.scenario_name} — {item.owner_display_name} — {STATUS_LABELS[item.status]}"
             ):
@@ -169,7 +334,7 @@ def main() -> None:
                     if st.button(
                         "بایگانی",
                         key=f"archive_{item.scenario_id}",
-                        disabled=not owner or item.status == "archived",
+                        disabled=item.status == "archived",
                         width="stretch",
                     ):
                         try:
@@ -182,7 +347,6 @@ def main() -> None:
                     if st.button(
                         "حذف",
                         key=f"delete_{item.scenario_id}",
-                        disabled=not owner,
                         width="stretch",
                     ):
                         try:
@@ -191,8 +355,6 @@ def main() -> None:
                             _show_error(exc)
                         else:
                             st.rerun()
-                if not owner:
-                    st.caption("سناریوی مشترک متعلق به کاربر دیگر فقط قابل بازکردن و کپی است.")
                 with st.expander("اطلاعات فنی"):
                     st.code(
                         f"scenario_id: {item.scenario_id}\nrow_version: {item.row_version}",

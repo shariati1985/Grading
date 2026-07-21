@@ -14,7 +14,10 @@ from ui.charts import (
     rank_axis_range,
     validate_indicator_score_chart_matches_table,
 )
-from ui.navigation import NAVIGATION_ITEMS
+from domain.scenario_contracts import ScenarioType
+from ui.navigation import NAVIGATION_ITEMS, UTILITY_NAVIGATION_ITEMS, scenario_href, scenario_mode_from_query
+from ui.sensitivity_components import indicator_cards_html, summary_cards_html, value_comparison_html
+from ui.sensitivity_labels import SCENARIO_DEFINITIONS, SCENARIO_TYPE_LABELS
 from ui.scenario_workflow import INDICATOR_LABELS, INDICATOR_ORDER
 
 
@@ -128,11 +131,52 @@ def test_empty_network_result_returns_no_chart() -> None:
 
 def test_persian_navigation_labels_and_icons_are_complete() -> None:
     assert [label for _, label, _ in NAVIGATION_ITEMS] == [
-        "داشبورد",
-        "ساخت سناریو",
-        "نتایج سناریو",
-        "اثر بر شبکه",
-        "مقایسه سناریوها",
-        "گزارش‌ها",
+        "تغییر شعبه محوری", "سناریوی چندشعبه‌ای", "تحلیل رتبه هدف",
     ]
     assert all(icon.strip() for icon, _, _ in NAVIGATION_ITEMS)
+    assert [mode for _, _, mode in NAVIGATION_ITEMS] == [item.scenario_type for item in SCENARIO_DEFINITIONS]
+    assert [item.label for item in SCENARIO_DEFINITIONS] == [SCENARIO_TYPE_LABELS[mode] for mode in ScenarioType]
+
+
+@pytest.mark.parametrize("mode", list(ScenarioType))
+def test_scenario_links_round_trip_to_exact_mode(mode) -> None:
+    assert scenario_href(mode) == f"/?scenario={mode.value}&new=1"
+    assert scenario_mode_from_query(mode.value) is mode
+    assert scenario_mode_from_query("OLD_SCENARIO") is None
+
+
+def test_home_and_saved_scenarios_navigation_are_visible_and_clean() -> None:
+    assert [label for _, label, _ in UTILITY_NAVIGATION_ITEMS] == ["صفحه اصلی", "سناریوهای ذخیره‌شده"]
+    assert all("rd_double_arrow_left" not in item for row in UTILITY_NAVIGATION_ITEMS for item in row)
+
+
+def test_preview_html_contains_complete_very_large_values() -> None:
+    markup = value_comparison_html(4_000_000_000_000.0, 4_500_000_000_000.25)
+    assert "4,000,000,000,000" in markup
+    assert "4,500,000,000,000.25" in markup
+    assert "500,000,000,000.25" in markup
+    assert "numeric-ltr" in markup
+
+
+def test_primary_indicator_card_uses_rank_and_weighted_score_not_normalized_score() -> None:
+    markup = indicator_cards_html([{
+        "name": "سود و زیان", "icon": "±", "weight": "3%", "tone": "success",
+        "status": "2 رتبه بهبود",
+        "raw": {"current": "-1,000", "scenario": "-500", "absolute": "+500", "percent": "50%"},
+        "rank": {"current": "20", "scenario": "18", "change": "2 رتبه بهبود"},
+        "weighted": {"current": "12.0", "scenario": "13.0", "effect": "+1.0"},
+    }])
+    assert "رتبه فعلی شعبه در شاخص" in markup
+    assert "رتبه سناریوی شعبه در شاخص" in markup
+    assert "اثر بر امتیاز کل" in markup
+    assert "امتیاز نرمال‌شده" not in markup
+    assert 'dir="ltr"' in markup
+
+
+def test_summary_is_one_cohesive_managerial_panel() -> None:
+    markup = summary_cards_html([{
+        "label": "رتبه کل شعبه", "current": "82", "scenario": "69",
+        "change": "13 رتبه بهبود", "tone": "success",
+    }], 1)
+    assert "جمع‌بندی مدیریتی سناریو" in markup
+    assert "وضعیت فعلی" in markup and "وضعیت سناریو" in markup and "نتیجه تغییر" in markup

@@ -231,10 +231,14 @@ class SQLiteScenarioRepository:
     def _owned_header(
         cls, connection: sqlite3.Connection, scenario_id: str, user_id: str
     ) -> sqlite3.Row:
-        row = cls._header_or_error(connection, scenario_id)
-        if row["owner_user_id"] != user_id:
-            raise AuthorizationError("Only the scenario owner may modify this scenario")
-        return row
+        row = connection.execute(
+            "SELECT * FROM scenario_header WHERE scenario_id = ? AND owner_user_id = ?",
+            (scenario_id, user_id),
+        ).fetchone()
+        if row is not None:
+            return row
+        cls._header_or_error(connection, scenario_id)
+        raise AuthorizationError("Only the scenario owner may access this scenario")
 
     def create_scenario(
         self,
@@ -244,7 +248,9 @@ class SQLiteScenarioRepository:
     ) -> ScenarioRecord:
         self._validate_record(scenario)
         now = _utc_now()
-        created = replace(scenario, created_at=now, updated_at=now, row_version=1)
+        created = replace(
+            scenario, visibility="private", created_at=now, updated_at=now, row_version=1
+        )
         with self._transaction() as connection:
             self._insert_header(connection, created)
             self._insert_changes(connection, created.scenario_id, changes)
@@ -276,11 +282,13 @@ class SQLiteScenarioRepository:
         changes: list[ScenarioChangeRecord],
         expected_row_version: int,
         result_summaries: list[ScenarioResultSummary] | None = None,
+        *,
+        requesting_user_id: str,
     ) -> ScenarioRecord:
         self._validate_record(scenario)
         with self._transaction() as connection:
             current = self._owned_header(
-                connection, scenario.scenario_id, scenario.owner_user_id
+                connection, scenario.scenario_id, requesting_user_id
             )
             actual_version = int(current["row_version"])
             if actual_version != expected_row_version:
@@ -292,6 +300,7 @@ class SQLiteScenarioRepository:
                 scenario,
                 owner_user_id=current["owner_user_id"],
                 owner_display_name=current["owner_display_name"],
+                visibility="private",
                 created_at=datetime.fromisoformat(current["created_at"]),
                 updated_at=_utc_now(),
                 row_version=actual_version + 1,
@@ -302,7 +311,7 @@ class SQLiteScenarioRepository:
                     scenario_name = ?, baseline_period = ?, status = ?, visibility = ?,
                     model_version = ?, weights_version = ?, updated_at = ?, row_version = ?,
                     selected_branch_ids_json = ?, summary_json = ?
-                WHERE scenario_id = ? AND row_version = ?
+                WHERE scenario_id = ? AND owner_user_id = ? AND row_version = ?
                 """,
                 (
                     updated.scenario_name,
@@ -316,6 +325,7 @@ class SQLiteScenarioRepository:
                     _json(updated.selected_branch_ids),
                     _json(updated.summary),
                     updated.scenario_id,
+                    requesting_user_id,
                     expected_row_version,
                 ),
             )
@@ -355,9 +365,7 @@ class SQLiteScenarioRepository:
         self, scenario_id: str, requesting_user_id: str
     ) -> tuple[ScenarioRecord, list[ScenarioChangeRecord], list[ScenarioResultSummary]]:
         with self._connection() as connection:
-            row = self._header_or_error(connection, scenario_id)
-            if row["visibility"] == "private" and row["owner_user_id"] != requesting_user_id:
-                raise AuthorizationError("This private scenario is visible only to its owner")
+            row = self._owned_header(connection, scenario_id, requesting_user_id)
             change_rows = connection.execute(
                 "SELECT * FROM scenario_change WHERE scenario_id = ? ORDER BY branch_id, indicator_key",
                 (scenario_id,),
@@ -402,7 +410,6 @@ class SQLiteScenarioRepository:
     def list_scenarios(
         self,
         requesting_user_id: str,
-        include_shared: bool = True,
         status: str | None = None,
         *,
         search: str | None = None,
@@ -413,12 +420,8 @@ class SQLiteScenarioRepository:
             raise ValueError(f"Unsupported scenario status: {status}")
         limit = max(1, min(int(limit), 100))
         offset = max(0, int(offset))
-        clauses = ["(owner_user_id = ?"]
+        clauses = ["owner_user_id = ?"]
         parameters: list[Any] = [requesting_user_id]
-        if include_shared:
-            clauses[0] += " OR visibility = 'shared')"
-        else:
-            clauses[0] += ")"
         if status is not None:
             clauses.append("status = ?")
             parameters.append(status)
@@ -454,8 +457,9 @@ class SQLiteScenarioRepository:
                 {"scenario_name": row["scenario_name"]},
             )
             cursor = connection.execute(
-                "DELETE FROM scenario_header WHERE scenario_id = ? AND row_version = ?",
-                (scenario_id, expected_row_version),
+                """DELETE FROM scenario_header
+                   WHERE scenario_id = ? AND owner_user_id = ? AND row_version = ?""",
+                (scenario_id, requesting_user_id, expected_row_version),
             )
             if cursor.rowcount != 1:
                 raise ConcurrencyError("Scenario changed during deletion")
@@ -472,8 +476,14 @@ class SQLiteScenarioRepository:
             updated_at = _utc_now()
             cursor = connection.execute(
                 """UPDATE scenario_header SET status = 'archived', updated_at = ?, row_version = ?
-                   WHERE scenario_id = ? AND row_version = ?""",
-                (_timestamp(updated_at), new_version, scenario_id, expected_row_version),
+                   WHERE scenario_id = ? AND owner_user_id = ? AND row_version = ?""",
+                (
+                    _timestamp(updated_at),
+                    new_version,
+                    scenario_id,
+                    requesting_user_id,
+                    expected_row_version,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ConcurrencyError("Scenario changed during archive")
@@ -501,12 +511,9 @@ class SQLiteScenarioRepository:
         if not new_name.strip():
             raise ValueError("new_name cannot be blank")
         with self._transaction() as connection:
-            source_row = self._header_or_error(connection, source_scenario_id)
-            if (
-                source_row["visibility"] == "private"
-                and source_row["owner_user_id"] != new_owner_user_id
-            ):
-                raise AuthorizationError("This private scenario cannot be copied by another user")
+            source_row = self._owned_header(
+                connection, source_scenario_id, new_owner_user_id
+            )
             source = self._record_from_row(source_row)
             now = _utc_now()
             copied = replace(

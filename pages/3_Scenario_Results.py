@@ -21,7 +21,7 @@ def main() -> None:
 
     st.subheader(f"سناریو: {st.session_state['scenario_name']}")
     selected = scenario_df.loc[
-        scenario_df[BRANCH_ID].isin(st.session_state["selected_branches"]),
+        scenario_df[BRANCH_ID].isin(st.session_state["selected_branch_ids"]),
         [BRANCH_ID, BRANCH_NAME, REGION],
     ]
     st.caption("شعب منتخب")

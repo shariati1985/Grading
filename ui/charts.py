@@ -140,10 +140,11 @@ def apply_chart_layout(
     return figure
 
 
-def render_chart(figure: Any) -> None:
+def render_chart(figure: Any, *, key: str) -> None:
     """Render a full-width responsive chart without the toolbar."""
     st.plotly_chart(
         figure,
+        key=key,
         width="stretch",
         config={"displayModeBar": False, "responsive": True, "displaylogo": False},
     )

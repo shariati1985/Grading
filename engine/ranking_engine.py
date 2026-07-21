@@ -52,6 +52,7 @@ class ModelOutputs:
 
     final_result: pd.DataFrame
     raw_data: pd.DataFrame
+    shifted_values: pd.DataFrame
     log_values: pd.DataFrame
     normalized_scores: pd.DataFrame
     weighted_matrix: pd.DataFrame
@@ -94,13 +95,22 @@ def prepare_input_data(input_df: pd.DataFrame) -> pd.DataFrame:
     return selected
 
 
-def _apply_log_transform(raw_data: pd.DataFrame) -> pd.DataFrame:
+def _create_shifted_values(raw_data: pd.DataFrame) -> pd.DataFrame:
+    """Shift every indicator to a strictly positive pre-log value."""
     result = raw_data[list(IDENTITY_COLUMNS)].copy()
     for column in INDICATOR_KEYS:
         series = raw_data[column].astype(float)
         minimum = float(series.min())
         shift = abs(minimum) + 1.0 if minimum < 0 else 1.0
-        result[column] = np.log(series + shift)
+        result[column] = series + shift
+    return result
+
+
+def _apply_log_transform(raw_data: pd.DataFrame) -> pd.DataFrame:
+    result = raw_data[list(IDENTITY_COLUMNS)].copy()
+    shifted_values = _create_shifted_values(raw_data)
+    for column in INDICATOR_KEYS:
+        result[column] = np.log(shifted_values[column])
     return result
 
 
@@ -190,6 +200,7 @@ def _calculate_final_result(weighted_matrix: pd.DataFrame) -> tuple[pd.DataFrame
 
 def _create_indicator_results(
     raw_data: pd.DataFrame,
+    shifted_values: pd.DataFrame,
     log_values: pd.DataFrame,
     normalized_scores: pd.DataFrame,
     weighted_matrix: pd.DataFrame,
@@ -203,6 +214,7 @@ def _create_indicator_results(
                 REGION: raw_data[REGION],
                 "indicator_key": indicator_key,
                 "raw_value": raw_data[indicator_key],
+                "shifted_value": shifted_values[indicator_key],
                 "log_value": log_values[indicator_key],
                 "score": normalized_scores[indicator_key],
                 "weighted_score": weighted_matrix[indicator_key],
@@ -222,16 +234,18 @@ def run_ranking_model(input_df: pd.DataFrame) -> ModelOutputs:
     if not np.isclose(sum(WEIGHTS.values()), 1.0):
         raise ValueError(f"Model weights must sum to 1; got {sum(WEIGHTS.values()):.6f}")
     raw_data = prepare_input_data(input_df)
+    shifted_values = _create_shifted_values(raw_data)
     log_values = _apply_log_transform(raw_data)
     normalized_scores = _normalize_indicators(log_values)
     weighted_matrix = _create_weighted_matrix(normalized_scores)
     final_result, grade_distribution = _calculate_final_result(weighted_matrix)
     indicator_results = _create_indicator_results(
-        raw_data, log_values, normalized_scores, weighted_matrix
+        raw_data, shifted_values, log_values, normalized_scores, weighted_matrix
     )
     return ModelOutputs(
         final_result=final_result,
         raw_data=raw_data,
+        shifted_values=shifted_values,
         log_values=log_values,
         normalized_scores=normalized_scores,
         weighted_matrix=weighted_matrix,

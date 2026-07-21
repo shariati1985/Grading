@@ -116,7 +116,7 @@ def main() -> None:
             color_discrete_sequence=px.colors.sequential.Blues_r,
         )
         apply_chart_layout(figure, title="توزیع درجات", height=420, show_legend=False, left_margin=70)
-        render_chart(figure)
+        render_chart(figure, key="dashboard_grade_distribution")
 
     region_counts = filtered[REGION].value_counts().rename_axis(REGION).reset_index(name="count")
     with chart_right:
@@ -139,7 +139,7 @@ def main() -> None:
             show_legend=False,
             left_margin=120,
         )
-        render_chart(figure)
+        render_chart(figure, key="dashboard_top_branch_scores")
 
     top_column, bottom_column = st.columns(2)
     with top_column:

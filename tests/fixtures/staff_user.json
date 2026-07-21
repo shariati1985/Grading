@@ -1,0 +1,8 @@
+{
+  "user_id": "staff.demo",
+  "display_name": "کاربر ستادی آزمایشی",
+  "roles": ["staff_user"],
+  "branch_id": null,
+  "branch_code": null,
+  "branch_name": null
+}

@@ -84,10 +84,11 @@ def apply_plotly_layout(
     return figure
 
 
-def render_plotly_chart(figure: Any) -> None:
+def render_plotly_chart(figure: Any, *, key: str) -> None:
     """Render a responsive Plotly chart without the visual toolbar."""
     st.plotly_chart(
         figure,
+        key=key,
         width="stretch",
         config={"displayModeBar": False, "responsive": True, "displaylogo": False},
     )

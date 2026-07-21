@@ -12,7 +12,7 @@ class SqlServerScenarioRepository:
     SQLAlchemy/pyodbc queries against ScenarioHeader, ScenarioChange,
     ScenarioResultSummary, and ScenarioAuditLog tables. Update/archive/delete
     contracts must include ``WHERE RowVersion = @ExpectedRowVersion`` and return
-    the new version atomically. Read contracts must enforce owner/visibility,
+    the new version atomically. Read contracts must enforce ownership,
     and list contracts must return headers only with server-side pagination.
     """
 
@@ -40,6 +40,8 @@ class SqlServerScenarioRepository:
         changes: list[ScenarioChangeRecord],
         expected_row_version: int,
         result_summaries: list[ScenarioResultSummary] | None = None,
+        *,
+        requesting_user_id: str,
     ) -> ScenarioRecord:
         self._pending()
 
@@ -51,7 +53,6 @@ class SqlServerScenarioRepository:
     def list_scenarios(
         self,
         requesting_user_id: str,
-        include_shared: bool = True,
         status: str | None = None,
         *,
         search: str | None = None,

@@ -18,7 +18,7 @@ from engine.validation import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_engine_matches_current_output_workbook(input_df: pd.DataFrame) -> None:
+def test_unaffected_engine_columns_match_current_output_workbook(input_df: pd.DataFrame) -> None:
     actual = run_ranking_model(input_df)
     expected = {
         sheet: pd.read_excel(ROOT / "Branch_Ranking_New_Model.xlsx", sheet_name=sheet)
@@ -45,13 +45,18 @@ def test_engine_matches_current_output_workbook(input_df: pd.DataFrame) -> None:
         if "branch_id" in frame:
             frame["branch_id"] = frame["branch_id"].astype(str)
     for sheet, actual_frame in actual_sheets.items():
+        expected_frame = expected[sheet]
         assert_frame_equal(
             actual_frame.reset_index(drop=True),
-            expected[sheet].reset_index(drop=True),
+            expected_frame.reset_index(drop=True),
             check_dtype=False,
             rtol=1e-12,
             atol=1e-12,
         )
+
+    assert set(actual.final_result["branch_id"]) == set(
+        expected["Weighted_Matrix"]["branch_id"]
+    )
 
 
 def test_final_scores_are_in_range(input_df: pd.DataFrame) -> None:
@@ -84,6 +89,7 @@ def test_indicator_ranks_cover_all_branches_and_indicators(input_df: pd.DataFram
         "region",
         "indicator_key",
         "raw_value",
+        "shifted_value",
         "log_value",
         "score",
         "weighted_score",
