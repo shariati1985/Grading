@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from domain.scenario_contracts import ScenarioType, TargetRankStatus
 from engine.scenario_rule_engine import RuleOperation
 from services.selection_scope import SelectionScope
@@ -17,6 +19,27 @@ SCENARIO_DESCRIPTIONS = {
     ScenarioType.MULTI_BRANCH: "قواعد عمومی و تغییرات اختصاصی را برای چند شعبه اعمال کنید.",
     ScenarioType.TARGET_RANK: "رشد متوازن موردنیاز شاخص‌ها برای دستیابی به رتبه هدف را بسنجید.",
 }
+
+
+@dataclass(frozen=True)
+class ScenarioDefinition:
+    """One shared presentation/navigation definition for a scenario mode."""
+
+    scenario_type: ScenarioType
+    label: str
+    description: str
+    icon: str
+    color: str
+
+
+SCENARIO_DEFINITIONS = tuple(
+    ScenarioDefinition(mode, SCENARIO_TYPE_LABELS[mode], SCENARIO_DESCRIPTIONS[mode], icon, color)
+    for mode, icon, color in (
+        (ScenarioType.FOCUS_BRANCH_ONLY, "◈", "purple"),
+        (ScenarioType.MULTI_BRANCH, "◆", "orange"),
+        (ScenarioType.TARGET_RANK, "◎", "green"),
+    )
+)
 
 OPERATION_LABELS = {
     RuleOperation.PERCENT_CHANGE: "درصد تغییر",
@@ -40,9 +63,7 @@ TARGET_STATUS_LABELS = {
 }
 
 MODE_COLORS = {
-    ScenarioType.FOCUS_BRANCH_ONLY: "purple",
-    ScenarioType.MULTI_BRANCH: "orange",
-    ScenarioType.TARGET_RANK: "green",
+    item.scenario_type: item.color for item in SCENARIO_DEFINITIONS
 }
 
 INDICATOR_TYPE_LABELS = {"benefit": "شاخص افزایشی"}

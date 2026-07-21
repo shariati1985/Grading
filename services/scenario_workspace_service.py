@@ -19,7 +19,7 @@ from ui.sensitivity_state import new_scenario_draft
 
 DEFINITION_SCHEMA = "phase3b.1.v1"
 PERSISTED_DRAFT_FIELDS = (
-    "scenario_name", "period", "focus_branch_id", "focus_branch_source",
+    "scenario_name", "period", "focus_branch_id", "focus_branch_source", "selected_branch_ids",
     "selected_indicator_ids", "focus_changes", "bulk_rules", "manual_overrides",
     "target_rank_request", "current_step",
 )
@@ -53,7 +53,7 @@ def serialize_sensitivity_draft(draft: dict[str, Any]) -> dict[str, Any]:
             }
         elif key in {"bulk_rules", "manual_overrides"}:
             value = [dict(item) for item in list(value or [])]
-        elif key == "selected_indicator_ids":
+        elif key in {"selected_indicator_ids", "selected_branch_ids"}:
             value = list(map(str, value or []))
         elif key == "target_rank_request":
             value = dict(value or {})
@@ -85,6 +85,10 @@ def restore_sensitivity_draft(
         focus = ""
     draft["focus_branch_id"] = focus or None
     draft["focus_branch_source"] = definition.get("focus_branch_source") if focus else None
+    draft["selected_branch_ids"] = [
+        str(item) for item in definition.get("selected_branch_ids", [])
+        if str(item) in known_branches
+    ]
     selected = []
     for indicator in definition.get("selected_indicator_ids", []):
         if indicator in INDICATOR_REGISTRY:
@@ -188,8 +192,36 @@ class ScenarioWorkspaceService:
         draft, warnings = restore_sensitivity_draft(
             definition, branch_ids=branch_ids, periods=periods
         )
+        draft["entry_source"] = "saved"
         self._store_identity(draft, record)
         return LoadedWorkspaceScenario(record, draft, tuple(results), warnings)
+
+    def load_focus_scenario(
+        self, scenario_id: str, *, baseline_data: pd.DataFrame, periods: Iterable[str],
+        restore_execution: bool = False,
+    ) -> LoadedWorkspaceScenario:
+        """Load a Branch-Centric definition and optionally rerun its official result."""
+        loaded = self.load_scenario(
+            scenario_id, branch_ids=baseline_data[BRANCH_ID].astype(str), periods=periods
+        )
+        if loaded.draft["scenario_type"] is not ScenarioType.FOCUS_BRANCH_ONLY:
+            raise ValueError("سناریوی انتخاب‌شده از نوع تغییر شعبه محوری نیست.")
+        if not restore_execution:
+            return loaded
+        if loaded.record.status != "executed":
+            loaded.draft["show_result"] = False
+            return LoadedWorkspaceScenario(
+                loaded.record, loaded.draft, loaded.results,
+                (*loaded.warnings, "این پیش‌نویس هنوز نتیجه محاسبه‌شده ندارد؛ تغییرات را بازبینی و سناریو را اجرا کنید."),
+            )
+        from services.scenario_execution_service import ScenarioExecutionService
+        from ui.sensitivity_adapters import build_focus_request
+
+        loaded.draft["execution_result"] = ScenarioExecutionService().execute(
+            build_focus_request(loaded.draft), baseline_data
+        )
+        loaded.draft["show_result"] = True
+        return loaded
 
     @staticmethod
     def _target_changes(solution: TargetRankSolution) -> list[ScenarioChange]:
@@ -263,6 +295,9 @@ class ScenarioWorkspaceService:
             selected_branch_ids=list(parent.selected_branch_ids), changes=list(changes),
             summary=summary, save_as_new=True,
         )
+
+    def delete_scenario(self, scenario_id: str, row_version: int) -> None:
+        self.management.delete_scenario(scenario_id, row_version)
 
 
 PERSISTENCE_STATUS_LABELS = {

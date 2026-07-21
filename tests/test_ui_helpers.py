@@ -6,6 +6,7 @@ from data.contracts import CANONICAL_COLUMNS
 from ui import SESSION_DEFAULTS, initialize_session_state
 from ui.data_access import load_dashboard_data
 from ui.formatters import (
+    format_compact_number, format_editable_number, format_managerial_number,
     format_grade,
     format_number,
     format_percentage,
@@ -13,6 +14,7 @@ from ui.formatters import (
     format_rank_change,
     format_raw_value,
     format_score,
+    parse_formatted_number,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +39,19 @@ def test_business_number_formatting_and_persian_labels() -> None:
     assert format_rank_change(4) == "+4 رتبه صعود"
     assert format_rank_change(-2) == "2 رتبه نزول"
     assert format_grade("Excellent Plus") == "ممتاز ویژه"
+
+
+def test_grouped_editable_numbers_support_large_decimal_and_negative_values() -> None:
+    assert format_compact_number(4_000_000_000_000.125) == "4,000,000,000,000.125"
+    assert format_editable_number(-1_234_567.25) == "-1,234,567.25"
+    assert parse_formatted_number("4,000,000,000,000.125") == 4_000_000_000_000.125
+    assert parse_formatted_number("−۱٬۲۳۴٫۵") == -1234.5
+
+
+def test_managerial_numbers_are_compact_for_large_and_negative_values() -> None:
+    assert format_managerial_number(43_914_706_149_140) == "43.9 تریلیون"
+    assert format_managerial_number(-2_500_000_000) == "-2.5 میلیارد"
+    assert format_managerial_number(125.25) == "125.2"
 
 
 def test_session_state_initializer_is_complete_and_non_destructive() -> None:

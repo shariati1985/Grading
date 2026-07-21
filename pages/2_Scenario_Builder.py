@@ -22,10 +22,14 @@ from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
 from ui import initialize_session_state
 from ui.components import render_empty_state, render_page_header
 from ui.data_access import load_dashboard_data
-from ui.formatters import format_grade, format_percentage, format_rank, format_raw_value, format_score
+from ui.formatters import (
+    format_compact_number, format_editable_number, format_grade, format_percentage,
+    format_rank, format_raw_value, format_score, parse_formatted_number,
+)
 from ui.sensitivity_adapters import (
     action_priority, build_focus_request, build_multi_request, build_target_request,
     count_proposal_presentation, preview_raw_operation, rank_change_presentation,
+    focus_result_presentation,
     result_branch_options, select_official_branch_result, service_error_message,
     target_solution_comparison, unique_indicator_ids,
 )
@@ -33,13 +37,18 @@ from ui.sensitivity_labels import (
     INDICATOR_TYPE_LABELS, MODE_COLORS, OPERATION_LABELS, SCENARIO_TYPE_LABELS,
     SCOPE_LABELS, TARGET_STATUS_LABELS,
 )
-from ui.sensitivity_components import render_process_timeline, render_wizard_steps
+from ui.sensitivity_components import (
+    render_indicator_cards, render_process_timeline, render_summary_cards,
+    render_value_comparison, render_wizard_steps,
+)
 from ui.sensitivity_state import (
     SESSION_HISTORY_KEY, SENSITIVITY_DRAFT_KEY, copy_sensitivity_draft,
     delete_bulk_rule, delete_manual_override, reset_sensitivity_draft,
-    return_to_edit, set_focus_branch, set_selected_indicators, switch_scenario_mode,
+    return_to_edit, set_focus_branch, set_multi_branch_selection,
+    set_selected_indicators, switch_scenario_mode,
 )
 from ui.styles import apply_global_styles
+from ui.navigation import activate_requested_scenario
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILE = ROOT / "Data.xlsx"
@@ -47,6 +56,7 @@ PERIOD = "1404-04"
 LOGGER = logging.getLogger(__name__)
 OPERATIONS = tuple(OPERATION_LABELS)
 SCOPES = tuple(SCOPE_LABELS)
+LOCAL_ADMINISTRATIVE_TESTING_MODE = True
 
 
 @st.cache_data(show_spinner="در حال بارگذاری و محاسبه اطلاعات مبنا...")
@@ -127,7 +137,7 @@ def _steps(mode: ScenarioType) -> tuple[str, ...]:
     if mode is ScenarioType.FOCUS_BRANCH_ONLY:
         return ("انتخاب شعبه", "انتخاب شاخص‌ها", "تعریف تغییرات", "بازبینی و اجرا")
     if mode is ScenarioType.MULTI_BRANCH:
-        return ("انتخاب شعبه محوری", "تعریف قواعد عمومی", "تغییرات اختصاصی شعب", "بازبینی و اجرا")
+        return ("انتخاب شعب", "تعریف قواعد عمومی", "تغییرات اختصاصی شعب", "بازبینی و اجرا")
     return ("انتخاب شعبه و رتبه هدف", "انتخاب شاخص‌های قابل تغییر", "تنظیم محدوده بررسی", "محاسبه و پیشنهاد")
 
 
@@ -148,6 +158,35 @@ def _branch_summary(data, outputs, branch_id: str) -> None:
 
 def _select_focus(draft, data, outputs, user) -> None:
     ids, names = _branch_maps(data)
+    if draft["scenario_type"] is ScenarioType.MULTI_BRANCH:
+        defaults = [item for item in draft.get("selected_branch_ids", []) if item in ids]
+        if user.branch_id and str(user.branch_id) in ids and str(user.branch_id) not in defaults:
+            defaults.insert(0, str(user.branch_id))
+        selected = st.multiselect(
+            "انتخاب چند شعبه", ids, default=defaults,
+            format_func=lambda item: _branch_label(item, names), key="sensitivity_multi_branches",
+        )
+        source = (FocusBranchSource.ASSIGNED_USER_BRANCH.value
+                  if user.branch_id and selected and selected[0] == str(user.branch_id)
+                  else FocusBranchSource.USER_SELECTED_BRANCH.value)
+        set_multi_branch_selection(draft, selected, focus_source=source)
+        if selected:
+            st.caption(f"شعبه محوری برای نمایش نتیجه: {_branch_label(selected[0], names)}")
+            _branch_summary(data, outputs, selected[0])
+        return
+    if draft["scenario_type"] is ScenarioType.FOCUS_BRANCH_ONLY and LOCAL_ADMINISTRATIVE_TESTING_MODE:
+        current = draft.get("focus_branch_id") if draft.get("entry_source") == "saved" else None
+        index = ids.index(current) + 1 if current in ids else 0
+        chosen = st.selectbox(
+            "جست‌وجو و انتخاب شعبه", [None, *ids], index=index,
+            format_func=lambda item: "ابتدا یک شعبه انتخاب کنید" if item is None else _branch_label(item, names),
+            key="sensitivity_focus_branch",
+            help="در حالت آزمون مدیریتی، همه شعب فعال قابل انتخاب‌اند.",
+        )
+        set_focus_branch(draft, chosen, FocusBranchSource.USER_SELECTED_BRANCH.value if chosen else None)
+        st.caption("حالت آزمون مدیریتی فعال است؛ محدودیت شعبه تخصیص‌یافته کاربر محلی اعمال نمی‌شود.")
+        if chosen: _branch_summary(data, outputs, chosen)
+        return
     if user.branch_id:
         try:
             focus = resolve_focus_branch(user, data)
@@ -204,20 +243,49 @@ def _focus_changes(draft, data) -> None:
         saved = draft["focus_changes"].get(indicator_id, {})
         with st.container(border=True):
             st.subheader(definition.display_name)
-            columns = st.columns([1.3, 1, 1.4])
+            control = st.container(border=True)
+            columns = control.columns([1.25, 1, 1.35])
             operation = columns[0].selectbox("نوع تغییر", OPERATIONS,
                 index=OPERATIONS.index(RuleOperation(saved.get("operation", RuleOperation.PERCENT_CHANGE.value))),
                 format_func=OPERATION_LABELS.get, key=f"focus_op_{indicator_id}")
-            value = columns[1].number_input("مقدار", value=float(saved.get("value", 0.0)), key=f"focus_value_{indicator_id}")
+            saved_value = float(saved.get("value", 0.0))
+            if operation is not RuleOperation.SET_VALUE:
+                direction = columns[1].radio(
+                    "جهت تغییر", (1, -1), index=1 if saved_value < 0 else 0,
+                    format_func=lambda item: "افزایش (+)" if item == 1 else "کاهش (−)",
+                    horizontal=True, key=f"focus_direction_{indicator_id}_{operation.value}",
+                )
+                input_label = "مقدار تغییر (٪)" if operation is RuleOperation.PERCENT_CHANGE else "مقدار قابل افزودن یا کسر"
+                raw_text = columns[2].text_input(
+                    input_label, value=format_editable_number(abs(saved_value)),
+                    key=f"focus_value_{indicator_id}_{operation.value}",
+                    help="عدد را می‌توانید با جداکننده هزارگان وارد کنید.",
+                )
+            else:
+                direction = 1
+                columns[1].caption("مقدار واردشده مستقیماً جایگزین مقدار فعلی می‌شود.")
+                raw_text = columns[2].text_input(
+                    "مقدار نهایی جایگزین", value=format_editable_number(saved_value),
+                    key=f"focus_value_{indicator_id}_{operation.value}",
+                    help="عدد را می‌توانید با جداکننده هزارگان وارد کنید.",
+                )
+            explanations = {
+                RuleOperation.PERCENT_CHANGE: "مقدار جدید = مقدار فعلی × (۱ + درصد تغییر ÷ ۱۰۰). جهت کاهش، درصد از مقدار فعلی کم می‌شود.",
+                RuleOperation.ABSOLUTE_CHANGE: "عدد واردشده، مطابق جهت انتخابی، به مقدار فعلی اضافه یا از آن کسر می‌شود.",
+                RuleOperation.SET_VALUE: "مقدار واردشده جایگزین کامل مقدار فعلی خواهد شد.",
+            }
+            control.caption(explanations[operation])
             try:
+                entered = parse_formatted_number(raw_text)
+                value = entered if operation is RuleOperation.SET_VALUE else abs(entered) * direction
                 preview = preview_raw_operation(raw[indicator_id], operation, value, indicator_id)
             except ValueError as exc:
-                columns[2].error(str(exc)); draft["focus_changes"].pop(indicator_id, None)
+                st.error(str(exc)); draft["focus_changes"].pop(indicator_id, None)
             else:
-                columns[2].metric("مقدار پایه ← مقدار پیش‌نمایش", f"{format_raw_value(raw[indicator_id])} ← {format_raw_value(preview)}")
+                render_value_comparison(float(raw[indicator_id]), preview)
                 draft["focus_changes"][indicator_id] = {"operation": operation.value, "value": float(value), "preview": preview}
             if indicator_id == PROFIT_LOSS_KEY and float(raw[indicator_id]) < 0 and operation is RuleOperation.PERCENT_CHANGE:
-                st.info("افزایش درصدی مقدار منفی را به سمت صفر و وضعیت بهتر حرکت می‌دهد.")
+                st.info("برای مقدار منفی سود و زیان، کاهش درصدی مقدار را به صفر نزدیک‌تر می‌کند؛ افزایش درصدی قدرمطلق زیان را بیشتر می‌کند.")
 
 
 def _add_bulk_rule(draft, data) -> None:
@@ -228,7 +296,8 @@ def _add_bulk_rule(draft, data) -> None:
         indicator = columns[1].selectbox("شاخص", list(INDICATOR_REGISTRY), format_func=lambda key: INDICATOR_REGISTRY[key].display_name)
         operation = columns[2].selectbox("نوع تغییر", OPERATIONS, format_func=OPERATION_LABELS.get)
         value = columns[3].number_input("مقدار", value=0.0)
-        selected_ids = st.multiselect("شعب منتخب", ids, format_func=lambda item: _branch_label(item, names), disabled=scope is not SelectionScope.SELECTED_BRANCHES)
+        defaults = [item for item in draft.get("selected_branch_ids", []) if item in ids]
+        selected_ids = st.multiselect("شعب منتخب", ids, default=defaults, format_func=lambda item: _branch_label(item, names), disabled=scope is not SelectionScope.SELECTED_BRANCHES)
         selected_regions = st.multiselect("مناطق منتخب", regions, disabled=scope is not SelectionScope.SELECTED_REGIONS)
         submitted = st.form_submit_button("افزودن قاعده عمومی", type="primary")
     if submitted:
@@ -288,8 +357,8 @@ def _review(draft, data) -> None:
     st.subheader("بازبینی سناریو")
     st.write(f"شعبه محوری: {_branch_label(focus, names)}")
     if draft["scenario_type"] is ScenarioType.FOCUS_BRANCH_ONLY:
-        rows = [{"شاخص": INDICATOR_REGISTRY[key].display_name, "مقدار پایه": format_raw_value(data.loc[data[BRANCH_ID].astype(str).eq(focus), key].iloc[0]),
-                 "عملیات": OPERATION_LABELS[RuleOperation(value["operation"])], "مقدار واردشده": value["value"], "مقدار پیش‌نمایش": format_raw_value(value["preview"])}
+        rows = [{"شاخص": INDICATOR_REGISTRY[key].display_name, "مقدار فعلی": format_compact_number(data.loc[data[BRANCH_ID].astype(str).eq(focus), key].iloc[0]),
+                 "نوع تغییر": OPERATION_LABELS[RuleOperation(value["operation"])], "مقدار واردشده": format_compact_number(value["value"]), "مقدار جدید سناریو": format_compact_number(value["preview"])}
                 for key, value in draft["focus_changes"].items()]
         st.dataframe(rows, width="stretch", hide_index=True)
         st.info("مقادیر خام همه شعب دیگر بدون تغییر باقی می‌ماند.")
@@ -325,15 +394,6 @@ def _execute(draft, data) -> None:
         st.rerun()
 
 
-def _comparison_table(result: ScenarioExecutionResult) -> pd.DataFrame:
-    rows = []
-    for item in result.focus_branch_comparison.indicator_comparisons:
-        rows.append({"شاخص": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
-            "مقدار پایه": item["baseline_raw_value"], "مقدار سناریو": item["scenario_raw_value"], "تغییر مقدار خام": item["raw_value_change"],
-            "امتیاز مدل پایه": item["baseline_score"], "امتیاز مدل سناریو": item["scenario_score"], "تغییر سهم وزنی": item["weighted_score_change"]})
-    return pd.DataFrame(rows)
-
-
 def _branch_section(title: str, items, data) -> None:
     st.subheader(title)
     names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
@@ -342,6 +402,43 @@ def _branch_section(title: str, items, data) -> None:
     st.dataframe([{"شعبه": names.get(item.branch_id, item.branch_id), "کد": item.branch_id, "رتبه پایه": item.baseline_rank,
                    "رتبه سناریو": item.scenario_rank, "تغییر رتبه": item.rank_change, "امتیاز پایه": item.baseline_final_score,
                    "امتیاز سناریو": item.scenario_final_score, "درجه پایه": format_grade(item.baseline_grade), "درجه سناریو": format_grade(item.scenario_grade)} for item in items], width="stretch", height=360, hide_index=True)
+
+
+def _focus_result_page(draft, data, result, comparison) -> None:
+    render_process_timeline(("وضعیت فعلی", "اعمال تغییرات", "اجرای مدل رسمی", "نتیجه سناریو"))
+    summaries, indicator_cards = focus_result_presentation(comparison)
+    render_summary_cards(summaries, len(indicator_cards))
+    st.subheader("اثر سناریو بر شاخص‌های تغییریافته")
+    if indicator_cards: render_indicator_cards(indicator_cards)
+    else: render_empty_state("هیچ شاخصی در این سناریو تغییر نکرده است.")
+    with st.expander("جزئیات کامل محاسبات", expanded=False):
+        detailed = [{
+            "شاخص": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
+            "مقدار فعلی": format_compact_number(item["baseline_raw_value"]),
+            "مقدار سناریو": format_compact_number(item["scenario_raw_value"]),
+            "تغییر مطلق": format_compact_number(item["raw_value_change"]),
+            "تغییر درصدی": format_percentage(item["raw_value_change_pct"]),
+            "امتیاز نرمال‌شده فعلی": format_score(item["baseline_score"]),
+            "امتیاز نرمال‌شده سناریو": format_score(item["scenario_score"]),
+            "تغییر امتیاز نرمال‌شده": format_score(float(item["scenario_score"]) - float(item["baseline_score"])),
+            "فرمول امتیاز موزون": "امتیاز نرمال‌شده × وزن واقعی شاخص",
+            "وزن واقعی شاخص": format_percentage(WEIGHTS[item["indicator_key"]] * 100),
+            "امتیاز موزون فعلی": format_score(float(item["baseline_score"]) * WEIGHTS[item["indicator_key"]]),
+            "امتیاز موزون سناریو": format_score(float(item["scenario_score"]) * WEIGHTS[item["indicator_key"]]),
+            "اثر بر امتیاز کل": format_score((float(item["scenario_score"]) - float(item["baseline_score"])) * WEIGHTS[item["indicator_key"]]),
+        } for item in comparison.indicator_comparisons]
+        st.dataframe(detailed, width="stretch", height=360, hide_index=True)
+        if any(item["indicator_key"] == "profit_loss" for item in comparison.indicator_comparisons):
+            st.info("امتیاز نرمال‌شده سود و زیان براساس دامنه مقادیر مدل و قواعد تبدیل مقادیر منفی محاسبه می‌شود؛ بنابراین برای تفسیر مدیریتی، مقدار واقعی، رتبه شاخص و امتیاز موزون مبنای اصلی نمایش قرار گرفته‌اند.")
+        _branch_section("شعب دارای تغییر در داده‌ها", result.modified_branches, data)
+        _branch_section("شعب متأثر در رتبه‌بندی", result.rank_affected_branches, data)
+    with st.container(border=True):
+        st.markdown('<div class="result-action-title">اقدامات سناریو</div>', unsafe_allow_html=True)
+        actions = st.columns(4)
+        if actions[0].button("بازگشت و ویرایش", width="stretch"): return_to_edit(draft); st.rerun()
+        if actions[1].button("ایجاد نسخه کپی", width="stretch"): copy_sensitivity_draft(st.session_state); st.rerun()
+        if actions[2].button("صفحه اصلی", width="stretch"): st.switch_page("app.py")
+        if actions[3].button("ذخیره نتیجه", width="stretch"): _save_execution(draft)
 
 
 def _result_page(draft, data) -> None:
@@ -354,6 +451,9 @@ def _result_page(draft, data) -> None:
                             format_func=lambda item: _branch_label(item, names), key="official_result_branch")
     draft["selected_result_branch_id"] = selected
     comparison = select_official_branch_result(result, selected)
+    if result.request.scenario_type is ScenarioType.FOCUS_BRANCH_ONLY:
+        _focus_result_page(draft, data, result, comparison)
+        return
     render_process_timeline(("داده‌های پایه", "اعمال تغییرات", "اجرای مدل رسمی", "تکمیل"))
     change_text, _ = rank_change_presentation(comparison.rank_change)
     cards = st.columns(4)
@@ -365,8 +465,8 @@ def _result_page(draft, data) -> None:
     if comparison.indicator_comparisons:
         rows = [{"شاخص": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
                  "مقدار پایه": item["baseline_raw_value"], "مقدار سناریو": item["scenario_raw_value"],
-                 "تغییر مقدار خام": item["raw_value_change"], "امتیاز مدل پایه": item["baseline_score"],
-                 "امتیاز مدل سناریو": item["scenario_score"], "تغییر سهم وزنی": item["weighted_score_change"]}
+                 "تغییر مقدار خام": item["raw_value_change"], "امتیاز نرمال‌شده فعلی": item["baseline_score"],
+                 "امتیاز نرمال‌شده سناریو": item["scenario_score"], "اثر بر امتیاز کل": item["weighted_score_change"]}
                 for item in comparison.indicator_comparisons]
         st.dataframe(rows, width="stretch", height=360, hide_index=True)
     else:
@@ -453,11 +553,11 @@ def _target_result(draft, data) -> None:
         priorities, tied = action_priority(solution.indicator_proposals)
         if priorities:
             st.subheader("اولویت اقدامات")
-            st.caption("اولویت بر اساس سهم واقعی هر شاخص در افزایش امتیاز این سناریو")
-            st.dataframe([{"شاخص": INDICATOR_REGISTRY[row["indicator_id"]].display_name, "افزایش سهم وزنی": row["weighted_contribution_delta"]} for row in priorities], width="stretch", height=280, hide_index=True)
+            st.caption("اولویت بر اساس اثر واقعی امتیاز موزون هر شاخص بر امتیاز کل این سناریو")
+            st.dataframe([{"شاخص": INDICATOR_REGISTRY[row["indicator_id"]].display_name, "اثر بر امتیاز کل": row["weighted_contribution_delta"]} for row in priorities], width="stretch", height=280, hide_index=True)
             if tied: st.info("در این سناریو تفاوت معناداری میان اولویت شاخص‌ها دیده نمی‌شود.")
         else:
-            st.info("در این سناریو افزایش مثبت و قابل تفکیکی در سهم وزنی شاخص‌ها دیده نمی‌شود.")
+            st.info("در این سناریو اثر مثبت و قابل تفکیکی از امتیاز موزون شاخص‌ها بر امتیاز کل دیده نمی‌شود.")
     if solution.scenario_outputs is not None and solution.baseline_outputs is not None:
         if st.button("ذخیره نتیجه رسمی", key="save_target_execution"):
             _save_execution(draft)
@@ -480,8 +580,8 @@ def _target_full_result(solution) -> None:
     st.subheader("مقایسه شاخص‌های شعبه محوری")
     st.dataframe([{"شاخص": INDICATOR_REGISTRY[item.indicator_id].display_name, "مقدار پایه": item.baseline_raw_value,
                    "مقدار سناریو": item.proposed_raw_value, "تغییر مقدار خام": item.absolute_change,
-                   "امتیاز مدل پایه": item.baseline_normalized_score, "امتیاز مدل سناریو": item.scenario_normalized_score,
-                   "تغییر سهم وزنی": (item.scenario_weighted_contribution or 0) - (item.baseline_weighted_contribution or 0)}
+                   "امتیاز نرمال‌شده فعلی": item.baseline_normalized_score, "امتیاز نرمال‌شده سناریو": item.scenario_normalized_score,
+                   "اثر بر امتیاز کل": (item.scenario_weighted_contribution or 0) - (item.baseline_weighted_contribution or 0)}
                   for item in solution.indicator_proposals], width="stretch", hide_index=True)
     modified = frame.loc[frame[BRANCH_ID].astype(str).eq(str(solution.focus_branch_id))] if solution.indicator_proposals else frame.iloc[0:0]
     affected = frame.loc[frame["rank_change"].ne(0) | frame["score_change"].ne(0) | frame["grade_changed"]]
@@ -506,7 +606,7 @@ def _navigation(draft) -> None:
 
 
 def main() -> None:
-    initialize_session_state(); apply_global_styles()
+    initialize_session_state(); activate_requested_scenario(); apply_global_styles()
     draft = st.session_state[SENSITIVITY_DRAFT_KEY]
     if draft.get("scenario_type") is None:
         render_page_header("فضای تحلیل حساسیت", "برای شروع، نوع سناریو را انتخاب کنید.")
@@ -520,13 +620,18 @@ def main() -> None:
     except (FileNotFoundError, ValueError, OSError): st.error("اطلاعات کاربر در دسترس نیست."); return
     mode = draft["scenario_type"]
     render_page_header(SCENARIO_TYPE_LABELS[mode], "تعریف سناریو و اجرای آن با مدل رسمی درجه‌بندی")
+    if mode is ScenarioType.FOCUS_BRANCH_ONLY:
+        if draft.get("entry_source") == "saved":
+            st.info("پیش‌نویس ذخیره‌شده باز شده است؛ شعبه و تغییرات ذخیره‌شده برای ادامه کار بازیابی شده‌اند.")
+        else:
+            st.info("سناریوی جدید — ابتدا شعبه موردنظر را در مرحله اول انتخاب کنید.")
     for warning in st.session_state.pop("sensitivity_restore_warnings", []):
         st.warning(warning)
     name = st.text_input("نام سناریو", value=str(draft.get("scenario_name") or ""), key="sensitivity_scenario_name")
     draft["scenario_name"] = name
     persistence = dict(draft.get("persistence") or {})
     dirty = workspace_service().has_unsaved_changes(draft)
-    status_text = "دارای تغییرات ذخیره‌نشده" if dirty else (
+    status_text = "تغییرات ذخیره‌نشده وجود دارد" if dirty else (
         "پیش‌نویس ذخیره‌شده" if persistence.get("status") == "draft" else
         "نتیجه ذخیره‌شده" if persistence.get("status") == "executed" else "ذخیره‌نشده"
     )

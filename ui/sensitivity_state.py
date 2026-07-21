@@ -20,6 +20,7 @@ def new_scenario_draft(mode: ScenarioType | None = None) -> dict[str, Any]:
         "scenario_name": "",
         "focus_branch_id": None,
         "focus_branch_source": None,
+        "selected_branch_ids": [],
         "selected_indicator_ids": [],
         "focus_changes": {},
         "bulk_rules": [],
@@ -32,6 +33,7 @@ def new_scenario_draft(mode: ScenarioType | None = None) -> dict[str, Any]:
         "execute_requested": False,
         "persistence": {},
         "persisted_result_summaries": [],
+        "entry_source": "new",
     }
 
 
@@ -49,6 +51,19 @@ def switch_scenario_mode(state: MutableMapping[str, Any], mode: ScenarioType) ->
     return state[SENSITIVITY_DRAFT_KEY]
 
 
+def start_new_scenario(state: MutableMapping[str, Any], mode: ScenarioType) -> dict[str, Any]:
+    """Start a clean wizard even when the requested mode matches the old draft."""
+    initialize_sensitivity_state(state)
+    state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+    for key in list(state):
+        text = str(key)
+        if text in {"sensitivity_focus_branch", "official_result_branch"} or text.startswith(
+            ("select_FOCUS_BRANCH_ONLY_", "focus_op_", "focus_value_", "focus_direction_")
+        ):
+            state.pop(key, None)
+    return state[SENSITIVITY_DRAFT_KEY]
+
+
 def set_focus_branch(draft: dict[str, Any], branch_id: str | None, source: str | None = None) -> None:
     normalized = str(branch_id) if branch_id is not None else None
     if draft.get("focus_branch_id") != normalized:
@@ -61,6 +76,19 @@ def set_focus_branch(draft: dict[str, Any], branch_id: str | None, source: str |
         draft["execution_result"] = None
         draft["target_solution"] = None
         draft["show_result"] = False
+
+
+def set_multi_branch_selection(
+    draft: dict[str, Any], branch_ids: list[str], *, focus_source: str | None = None
+) -> None:
+    """Store a unique multi-branch selection and use its first branch as focus."""
+    selected = list(dict.fromkeys(map(str, branch_ids)))
+    focus = selected[0] if selected else None
+    if draft.get("focus_branch_id") != focus:
+        set_focus_branch(draft, focus, focus_source if focus else None)
+    if draft.get("selected_branch_ids") != selected:
+        draft["selected_branch_ids"] = selected
+        invalidate_computed_result(draft)
 
 
 def invalidate_computed_result(draft: dict[str, Any]) -> None:

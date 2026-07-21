@@ -66,6 +66,7 @@ def test_save_list_and_restore_real_drafts(workspace, mode) -> None:
     assert loaded.draft["scenario_type"] is mode
     assert loaded.draft["current_step"] == 3
     assert loaded.draft["execution_result"] is None
+    assert loaded.draft["entry_source"] == "saved"
 
 
 def test_restore_cleans_incompatible_references_without_substitution() -> None:
@@ -125,6 +126,12 @@ def test_save_executed_uses_existing_official_result_without_reranking(workspace
 
 
 def test_empty_workspace_has_no_fake_persisted_history(workspace) -> None:
+    assert workspace.list_scenarios() == []
+
+
+def test_branch_centric_saved_scenario_can_be_deleted_after_confirmation_service_call(workspace) -> None:
+    saved = workspace.save_draft(_draft(ScenarioType.FOCUS_BRANCH_ONLY))
+    workspace.delete_scenario(saved.scenario_id, saved.row_version)
     assert workspace.list_scenarios() == []
 
 

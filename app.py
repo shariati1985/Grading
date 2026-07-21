@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import html
 import streamlit as st
 
 from pathlib import Path
 
 from domain.scenario_contracts import ScenarioType
 from ui import initialize_session_state
-from ui.components import render_empty_state, render_page_header
+from ui.components import render_empty_state
 from ui.data_access import load_dashboard_data
-from ui.sensitivity_labels import MODE_COLORS, SCENARIO_DESCRIPTIONS, SCENARIO_TYPE_LABELS
-from ui.sensitivity_state import SESSION_HISTORY_KEY, switch_scenario_mode
+from ui.sensitivity_labels import SCENARIO_TYPE_LABELS
+from ui.sensitivity_state import SESSION_HISTORY_KEY
+from ui.sensitivity_components import render_scenario_cards
+from ui.navigation import activate_requested_scenario
 from services.factory import create_local_scenario_service
 from services.scenario_workspace_service import PERSISTENCE_STATUS_LABELS, ScenarioWorkspaceService
 from persistence.contracts import ScenarioPersistenceError
@@ -40,11 +43,18 @@ def _workspace_service() -> ScenarioWorkspaceService:
 
 def _open_saved(scenario_id: str, *, show_result: bool = False) -> None:
     data, _ = _context()
-    loaded = _workspace_service().load_scenario(
-        scenario_id, branch_ids=data["branch_id"].astype(str), periods=["1404-04"]
-    )
-    loaded.draft["persisted_result_summaries"] = list(loaded.results) if show_result else []
-    loaded.draft["show_result"] = bool(show_result and loaded.results)
+    record = next((item for item in _workspace_service().list_scenarios(limit=100) if item.scenario_id == scenario_id), None)
+    mode = None if record is None else record.summary.get("scenario_type")
+    if mode == ScenarioType.FOCUS_BRANCH_ONLY.value:
+        loaded = _workspace_service().load_focus_scenario(
+            scenario_id, baseline_data=data, periods=["1404-04"], restore_execution=show_result
+        )
+    else:
+        loaded = _workspace_service().load_scenario(
+            scenario_id, branch_ids=data["branch_id"].astype(str), periods=["1404-04"]
+        )
+        loaded.draft["persisted_result_summaries"] = list(loaded.results) if show_result else []
+        loaded.draft["show_result"] = bool(show_result and loaded.results)
     st.session_state["sensitivity_draft"] = loaded.draft
     st.session_state["sensitivity_restore_warnings"] = list(loaded.warnings)
     st.switch_page("pages/2_Scenario_Builder.py")
@@ -55,17 +65,15 @@ def _new_version(scenario_id: str) -> None:
     _open_saved(created.scenario_id)
 
 
-def _start(mode: ScenarioType) -> None:
-    switch_scenario_mode(st.session_state, mode)
-    st.switch_page("pages/2_Scenario_Builder.py")
-
-
 def main() -> None:
     initialize_session_state()
+    activate_requested_scenario()
     apply_global_styles()
-    render_page_header(
-        "سامانه تحلیل حساسیت مدل درجه‌بندی شعب",
-        "تغییرات فرضی شاخص‌های شعب را اعمال کنید و اثر آن را بر امتیاز، رتبه و درجه مشاهده کنید.",
+    st.markdown(
+        '<header class="bank-hero"><div class="bank-logo-slot" aria-label="بانک اقتصاد نوین"></div>'
+        '<div><h1>سامانه تحلیل حساسیت درجه‌بندی شعب</h1>'
+        '<p>ارزیابی اثر تغییر شاخص‌ها بر رتبه، امتیاز و درجه شعبه</p></div></header>',
+        unsafe_allow_html=True,
     )
     try:
         data, _ = _context()
@@ -76,12 +84,7 @@ def main() -> None:
     context[0].metric("دوره مبنا", "1404-04")
     context[1].metric("تعداد شعب", f"{len(data):,}")
     st.markdown("### انتخاب نوع سناریو")
-    icons = {ScenarioType.FOCUS_BRANCH_ONLY: "◈", ScenarioType.MULTI_BRANCH: "◆", ScenarioType.TARGET_RANK: "◎"}
-    for column, mode in zip(st.columns(3), ScenarioType):
-        with column:
-            with st.container(border=True):
-                st.markdown(f"<div class='mode-card {MODE_COLORS[mode]}'><span>{icons[mode]}</span><h3>{SCENARIO_TYPE_LABELS[mode]}</h3><p>{SCENARIO_DESCRIPTIONS[mode]}</p></div>", unsafe_allow_html=True)
-                st.button("شروع", key=f"home_start_{mode.value}", type="primary", width="stretch", on_click=_start, args=(mode,))
+    render_scenario_cards()
     st.markdown("### سناریوهای این نشست")
     history = st.session_state[SESSION_HISTORY_KEY]
     if not history:
@@ -89,6 +92,7 @@ def main() -> None:
     else:
         st.dataframe(history, width="stretch", hide_index=True)
     st.markdown("### سناریوهای ذخیره‌شده")
+    st.markdown('<div id="saved-scenarios"></div>', unsafe_allow_html=True)
     try:
         records = _workspace_service().list_scenarios(limit=100)
     except (ScenarioPersistenceError, ValueError, OSError):
@@ -97,18 +101,50 @@ def main() -> None:
     if not records:
         render_empty_state("هنوز سناریوی ذخیره‌شده‌ای وجود ندارد.")
         return
+    branch_names = data.assign(branch_id=data["branch_id"].astype(str)).set_index("branch_id")["branch_name"].astype(str).to_dict()
     for item in records:
         lineage = dict(item.summary.get("phase3b_lineage") or {})
         version = int(lineage.get("version_number") or 1)
         mode = item.summary.get("scenario_type")
         try: mode_label = SCENARIO_TYPE_LABELS[ScenarioType(str(mode))]
         except ValueError: mode_label = "سناریوی قدیمی"
-        with st.expander(f"{item.scenario_name} — نسخه {version} — {PERSISTENCE_STATUS_LABELS.get(item.status, 'ذخیره‌شده')}"):
-            st.caption(f"نوع: {mode_label} | شعبه محوری: {item.selected_branch_ids[0] if item.selected_branch_ids else '—'} | دوره: {item.baseline_period} | آخرین تغییر: {item.updated_at.astimezone().strftime('%Y-%m-%d %H:%M')}")
-            actions = st.columns(3)
-            actions[0].button("بازکردن", key=f"workspace_open_{item.scenario_id}", on_click=_open_saved, args=(item.scenario_id,), width="stretch")
-            actions[1].button("ایجاد نسخه جدید", key=f"workspace_version_{item.scenario_id}", on_click=_new_version, args=(item.scenario_id,), width="stretch")
-            actions[2].button("مشاهده نتیجه", key=f"workspace_result_{item.scenario_id}", disabled=item.status != "executed", on_click=_open_saved, args=(item.scenario_id,), kwargs={"show_result": True}, width="stretch")
+        branch_id = item.selected_branch_ids[0] if item.selected_branch_ids else None
+        branch_label = branch_names.get(str(branch_id), str(branch_id)) if branch_id else "بدون شعبه منتخب"
+        with st.container(border=True):
+            st.markdown(
+                f'<div class="saved-scenario-card"><div><h3>{html.escape(item.scenario_name)}</h3>'
+                f'<p>{html.escape(mode_label)} · {html.escape(branch_label)}</p></div>'
+                f'<span>{html.escape(PERSISTENCE_STATUS_LABELS.get(item.status, "ذخیره‌شده"))}</span></div>',
+                unsafe_allow_html=True,
+            )
+            metadata = st.columns(3)
+            metadata[0].caption(f"نسخه {version}")
+            metadata[1].caption(f"ایجاد: {item.created_at.astimezone().strftime('%Y-%m-%d %H:%M')}")
+            metadata[2].caption(f"آخرین تغییر: {item.updated_at.astimezone().strftime('%Y-%m-%d %H:%M')}")
+            actions = st.columns(4)
+            if actions[0].button("بازکردن و ادامه", key=f"workspace_open_{item.scenario_id}", width="stretch"):
+                try: _open_saved(item.scenario_id)
+                except Exception: st.error("بازکردن سناریو انجام نشد. اطلاعات ذخیره‌شده را بازبینی کنید.")
+            if actions[1].button("مشاهده نتیجه", key=f"workspace_result_{item.scenario_id}", disabled=item.status != "executed", width="stretch"):
+                try: _open_saved(item.scenario_id, show_result=True)
+                except Exception: st.error("بازیابی نتیجه سناریو انجام نشد. سناریو را باز کنید و دوباره اجرا کنید.")
+            if item.status != "executed":
+                st.caption("این پیش‌نویس هنوز نتیجه رسمی ذخیره‌شده ندارد؛ آن را باز کنید و سناریو را اجرا کنید.")
+            if actions[2].button("ایجاد نسخه جدید", key=f"workspace_version_{item.scenario_id}", width="stretch"):
+                try: _new_version(item.scenario_id)
+                except Exception: st.error("ایجاد نسخه جدید انجام نشد.")
+            if mode == ScenarioType.FOCUS_BRANCH_ONLY.value and actions[3].button("حذف", key=f"ask_delete_{item.scenario_id}", width="stretch"):
+                st.session_state["confirm_scenario_delete"] = item.scenario_id
+                st.rerun()
+            if st.session_state.get("confirm_scenario_delete") == item.scenario_id:
+                st.warning("آیا از حذف این سناریوی ذخیره‌شده مطمئن هستید؟ این عملیات قابل بازگشت نیست.")
+                confirm = st.columns(2)
+                if confirm[0].button("بله، حذف شود", key=f"confirm_delete_{item.scenario_id}"):
+                    try: _workspace_service().delete_scenario(item.scenario_id, item.row_version)
+                    except (ScenarioPersistenceError, ValueError, OSError): st.error("حذف سناریو انجام نشد.")
+                    else: st.session_state.pop("confirm_scenario_delete", None); st.rerun()
+                if confirm[1].button("انصراف", key=f"cancel_delete_{item.scenario_id}"):
+                    st.session_state.pop("confirm_scenario_delete", None); st.rerun()
 
 
 if __name__ == "__main__":
