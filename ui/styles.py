@@ -218,6 +218,19 @@ def apply_global_styles() -> None:
             h2 { font-size: 20px !important; }
             [data-testid="column"] { min-width: 100% !important; }
         }
+        .mode-card { min-height: 155px; padding: 8px 4px; text-align: right; }
+        .mode-card > span { font-size: 30px; font-weight: 800; }
+        .mode-card.purple > span { color: #6941c6; }
+        .mode-card.orange > span { color: #dc6803; }
+        .mode-card.green > span { color: #039855; }
+        .mode-card h3 { margin: 8px 0; }
+        .mode-card p { color: #667085; line-height: 1.9; }
+        .wizard-steps { display:flex; gap:8px; margin:10px 0 24px; direction:rtl; }
+        .wizard-step { flex:1; padding:10px; border-radius:10px; background:#f2f4f7;
+            color:#667085; text-align:center; border:1px solid #eaecf0; }
+        .wizard-step.active { background:#eef4ff; color:#3538cd; border-color:#c7d7fe; font-weight:700; }
+        .process-line { padding:14px; border:1px solid #eaecf0; border-radius:12px;
+            background:#fff; text-align:center; color:#344054; word-spacing:8px; }
         </style>
         """,
         unsafe_allow_html=True,

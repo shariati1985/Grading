@@ -10,6 +10,8 @@ from domain.scenario_contracts import (
     ScenarioExecutionResult,
     ScenarioRequest,
     ScenarioType,
+    TargetRankRequest,
+    TargetRankSolution,
 )
 from engine.comparison_engine import ScenarioComparison, compare_model_outputs
 from engine.ranking_engine import BRANCH_ID, prepare_input_data, run_ranking_model
@@ -51,6 +53,14 @@ def branch_comparison_from_results(
 
 class ScenarioExecutionService:
     """Execute scenarios while the official engine remains the sole calculator."""
+
+    def solve_target_rank(
+        self, request: TargetRankRequest, baseline_data: pd.DataFrame
+    ) -> TargetRankSolution:
+        """Route target-rank execution through the application service boundary."""
+        from services.target_rank_solver import solve_target_rank
+
+        return solve_target_rank(request, baseline_data)
 
     def execute(
         self, request: ScenarioRequest, baseline_data: pd.DataFrame

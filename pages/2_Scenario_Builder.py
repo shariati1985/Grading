@@ -1,1617 +1,579 @@
-"""Complete interactive sensitivity-analysis Scenario Builder."""
+"""Three-mode Persian RTL sensitivity workspace."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Final
-from uuid import NAMESPACE_URL, uuid4, uuid5
+import logging
 
 import pandas as pd
 import streamlit as st
 
-from engine.ranking_engine import BRANCH_ID, BRANCH_NAME, REGION, ModelOutputs
-from engine.indicator_registry import INDICATOR_REGISTRY
-from engine.scenario_rule_engine import (
-    IndicatorRule,
-    RuleOperation,
-    RulePreview,
-    ScenarioRuleEngine,
-)
-from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
-from persistence.models import ScenarioRecord
+from domain.scenario_contracts import ScenarioExecutionResult, ScenarioType, TargetRankStatus
+from engine.indicator_registry import INDICATOR_REGISTRY, PROFIT_LOSS_KEY
+from engine.ranking_engine import BRANCH_ID, BRANCH_NAME, INDICATOR_TYPES, REGION, WEIGHTS
+from engine.scenario_rule_engine import RuleOperation
+from services.focus_branch import FocusBranchSource, resolve_focus_branch
+from services.scenario_execution_service import ScenarioExecutionService, ScenarioRequestValidationError
+from services.selection_scope import SelectionResolver, SelectionScope
+from services.user_context import load_current_user
 from services.factory import create_local_scenario_service
-from services.focus_branch import resolve_focus_branch, scenario_mode_labels
-from services.scenario_management_service import ScenarioManagementService
-from services.selection_scope import (
-    SelectionResolutionError,
-    SelectionResolver,
-    SelectionScope,
-)
+from services.scenario_workspace_service import ScenarioWorkspaceService
+from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
 from ui import initialize_session_state
-from ui.branch_navigation import adjacent_branch_id, retain_selected_branch
-from ui.manual_override_state import (
-    ManualOverrideRow,
-    NO_CHANGE_LABEL,
-    RULE_UI_OPTIONS,
-    delete_override_group,
-    domain_rule_to_ui,
-    duplicate_override_keys,
-    new_override_row,
-    normalize_rule_widget_state,
-    serialize_override_rows,
-    to_domain_overrides,
-    replace_override_group,
-    ui_rule_to_domain,
-)
-from ui.components import (
-    render_empty_state,
-    render_kpi_card,
-    render_kpi_group,
-    render_page_header,
-)
-from ui.charts import (
-    build_indicator_rank_lollipop,
-    build_network_rank_chart,
-    build_selected_indicator_score_chart,
-    prepare_selected_indicator_scores,
-    prepare_network_rank_changes,
-    render_chart,
-    validate_indicator_score_chart_matches_table,
-)
+from ui.components import render_empty_state, render_page_header
 from ui.data_access import load_dashboard_data
-from ui.formatters import (
-    format_grade,
-    format_number,
-    format_percentage,
-    format_rank,
-    format_rank_change,
-    format_raw_value,
-    format_score,
+from ui.formatters import format_grade, format_percentage, format_rank, format_raw_value, format_score
+from ui.sensitivity_adapters import (
+    action_priority, build_focus_request, build_multi_request, build_target_request,
+    count_proposal_presentation, preview_raw_operation, rank_change_presentation,
+    result_branch_options, select_official_branch_result, service_error_message,
+    target_solution_comparison, unique_indicator_ids,
 )
-from ui.scenario_workflow import (
-    INDICATOR_LABELS,
-    INDICATOR_ORDER,
-    NETWORK_FILTERS,
-    build_editor_data,
-    build_indicator_editor_state,
-    build_scenario_changes_from_editor_state,
-    calculate_change_percent,
-    calculate_scenario_value,
-    editor_edit_modes,
-    execute_scenario_from_editor_state,
-    execute_generated_changes,
-    filter_network_impact,
-    indicator_widget_key,
-    reset_scenario_state,
-    reset_all_indicator_rows,
-    reset_indicator_row,
-    restore_indicator_editor_state,
-    selected_branch_results,
-    update_indicator_editor_state,
+from ui.sensitivity_labels import (
+    INDICATOR_TYPE_LABELS, MODE_COLORS, OPERATION_LABELS, SCENARIO_TYPE_LABELS,
+    SCOPE_LABELS, TARGET_STATUS_LABELS,
+)
+from ui.sensitivity_components import render_process_timeline, render_wizard_steps
+from ui.sensitivity_state import (
+    SESSION_HISTORY_KEY, SENSITIVITY_DRAFT_KEY, copy_sensitivity_draft,
+    delete_bulk_rule, delete_manual_override, reset_sensitivity_draft,
+    return_to_edit, set_focus_branch, set_selected_indicators, switch_scenario_mode,
 )
 from ui.styles import apply_global_styles
-from ui.tables import (
-    render_indicator_scores_table,
-    render_indicator_values_table,
-    render_table,
-)
 
-ROOT: Final[Path] = Path(__file__).resolve().parents[1]
-DATA_FILE: Final[Path] = ROOT / "Data.xlsx"
-MODEL_PERIOD: Final[str] = "1404-04"
-OTHER_SCOPE_LABELS: Final[dict[SelectionScope, str]] = {
-    SelectionScope.SELECTED_BRANCHES: "شعب منتخب",
-    SelectionScope.SELECTED_REGIONS: "مناطق منتخب",
-    SelectionScope.ALL_BRANCHES: "کل شعب بانک",
-}
-
-
-def _prepare_rule_widgets(
-    *,
-    operation_key: str,
-    value_key: str,
-    default_label: str,
-    default_value: float,
-) -> bool:
-    return normalize_rule_widget_state(
-        st.session_state,
-        operation_key=operation_key,
-        value_key=value_key,
-        default_label=default_label,
-        default_value=default_value,
-    )
-
-
-def _render_focus_branch_overrides(
-    baseline_df: pd.DataFrame, user_branch_id: str
-) -> list[ManualOverrideRow]:
-    branch = baseline_df.assign(**{BRANCH_ID: baseline_df[BRANCH_ID].astype(str)}).loc[
-        lambda frame: frame[BRANCH_ID].eq(user_branch_id)
-    ].iloc[0]
-    group_id = str(uuid5(NAMESPACE_URL, f"user-branch-override:{user_branch_id}"))
-    rows: list[ManualOverrideRow] = [
-        dict(row)
-        for row in st.session_state.get(
-            "focus_branch_overrides",
-            st.session_state.get("focus_branch_override_rows", []),
-        )
-    ]
-    existing = {row["indicator_key"]: row for row in rows}
-    assigned_focus = (
-        st.session_state.get("focus_branch_source") == "ASSIGNED_USER_BRANCH"
-    )
-    st.markdown(
-        "#### تنظیمات شعبه من" if assigned_focus else "#### تنظیمات شعبه محوری تحلیل"
-    )
-    st.caption(f"{branch[BRANCH_NAME]} — کد {user_branch_id} — منطقه {branch[REGION]}")
-    with st.form(f"focus_branch_override_form_{group_id}"):
-        for indicator_key, indicator in INDICATOR_REGISTRY.items():
-            current = existing.get(indicator_key)
-            if current:
-                label, displayed = domain_rule_to_ui(
-                    RuleOperation(current["operation"]), float(current["input_value"])
-                )
-            else:
-                label, displayed = NO_CHANGE_LABEL, 0.0
-            operation_key = f"focus_{user_branch_id}_{indicator_key}_operation"
-            value_key = f"focus_{user_branch_id}_{indicator_key}_value"
-            value_disabled = _prepare_rule_widgets(
-                operation_key=operation_key,
-                value_key=value_key,
-                default_label=label,
-                default_value=displayed,
-            )
-            columns = st.columns([2, 1.5, 1])
-            with columns[0]:
-                st.write(indicator.display_name)
-            with columns[1]:
-                option = st.selectbox(
-                    f"عملیات {indicator.display_name}", RULE_UI_OPTIONS,
-                    key=operation_key, label_visibility="collapsed",
-                )
-            with columns[2]:
-                st.number_input(
-                    f"مقدار {indicator.display_name}", value=0.0, key=value_key,
-                    disabled=value_disabled,
-                    label_visibility="collapsed",
-                )
-        submitted = st.form_submit_button(
-            "ثبت تغییرات شعبه من"
-            if assigned_focus else "ثبت تغییرات شعبه محوری تحلیل"
-        )
-    if submitted:
-        replacement: list[ManualOverrideRow] = []
-        for indicator_key in INDICATOR_REGISTRY:
-            converted = ui_rule_to_domain(
-                st.session_state[f"focus_{user_branch_id}_{indicator_key}_operation"],
-                float(st.session_state[f"focus_{user_branch_id}_{indicator_key}_value"]),
-            )
-            if converted is None:
-                continue
-            previous = existing.get(indicator_key)
-            replacement.append(
-                new_override_row(
-                    branch_id=user_branch_id,
-                    indicator_key=indicator_key,
-                    operation=converted[0],
-                    input_value=converted[1],
-                    group_id=group_id,
-                    source="focus_branch_override",
-                    row_id_factory=(
-                        (lambda row_id=previous["row_id"]: row_id)
-                        if previous else (lambda: str(uuid4()))
-                    ),
-                )
-            )
-        rows = replacement
-        st.session_state["focus_branch_overrides"] = rows
-        st.session_state["focus_branch_override_rows"] = rows
-        st.success(
-            "تغییرات شعبه من ثبت شد."
-            if assigned_focus else "تغییرات شعبه محوری تحلیل ثبت شد."
-        )
-        if not rows:
-            st.info("برای شعبه محوری تغییری ثبت نشده است.")
-    return rows
-
-
-def _render_user_only_preview(
-    baseline_df: pd.DataFrame, user_branch_id: str
-) -> tuple[RulePreview, dict[str, object]]:
-    rows = _render_focus_branch_overrides(baseline_df, user_branch_id)
-    preview = ScenarioRuleEngine.preview(
-        [user_branch_id], baseline_df, [],
-        to_domain_overrides(rows, default_source="focus_branch_override")
-    )
-    definition = {
-        "schema_version": 2,
-        "scenario_mode": "ONLY_USER_BRANCH",
-        "focus_branch_id": user_branch_id,
-        "focus_branch_source": st.session_state["focus_branch_source"],
-        "selection_scope": SelectionScope.USER_BRANCH.value,
-        "selection_inputs": {
-            "selected_regions": [],
-            "selected_branch_ids": [user_branch_id],
-        },
-        "bulk_rules": [],
-        "network_bulk_rules": [],
-        "focus_branch_overrides": serialize_override_rows(rows),
-        "manual_overrides": [],
-        "branch_exception_groups": {},
-        "validation_status": "valid" if preview.is_valid else "invalid",
-    }
-    st.markdown(
-        "#### تغییرات شعبه من"
-        if st.session_state.get("focus_branch_source") == "ASSIGNED_USER_BRANCH"
-        else "#### تغییرات شعبه محوری تحلیل"
-    )
-    frame = pd.DataFrame([row.__dict__ for row in preview.rows])
-    if not frame.empty:
-        frame = frame.loc[
-            frame["final_value"].ne(frame["baseline_value"])
-            | frame["validation_status"].eq("invalid")
-        ]
-    if frame.empty:
-        st.caption("تغییری ثبت نشده است.")
-    else:
-        frame["change_source"] = frame["change_source"].replace(
-            {"manual_override": "focus_branch_override"}
-        )
-        st.dataframe(frame, width="stretch", height=320)
-    if preview.issues:
-        st.markdown("#### خطاهای اعتبارسنجی")
-        st.dataframe(pd.DataFrame([issue.__dict__ for issue in preview.issues]))
-    return preview, definition
-
-
-def _render_rule_preview(
-    baseline_df: pd.DataFrame,
-    user_branch_id: str,
-    other_ids: list[str],
-    service: ScenarioManagementService,
-) -> tuple[RulePreview, dict[str, object]]:
-    user_rows = _render_focus_branch_overrides(baseline_df, user_branch_id)
-    st.markdown("#### قاعده عمومی سایر شعب")
-    rules: list[IndicatorRule] = []
-    for indicator_key, definition in INDICATOR_REGISTRY.items():
-        operation_key = f"network_{indicator_key}_operation"
-        value_key = f"network_{indicator_key}_value"
-        legacy_operation_key = f"_bulk_operation_{indicator_key}"
-        legacy_value_key = f"_bulk_value_{indicator_key}"
-        if operation_key not in st.session_state and legacy_operation_key in st.session_state:
-            st.session_state[operation_key] = st.session_state[legacy_operation_key]
-        if value_key not in st.session_state and legacy_value_key in st.session_state:
-            st.session_state[value_key] = st.session_state[legacy_value_key]
-        value_disabled = _prepare_rule_widgets(
-            operation_key=operation_key,
-            value_key=value_key,
-            default_label=NO_CHANGE_LABEL,
-            default_value=0.0,
-        )
-        columns = st.columns([2, 1.5, 1])
-        with columns[0]:
-            st.write(definition.display_name)
-        with columns[1]:
-            option = st.selectbox(
-                f"عملیات {definition.display_name}",
-                RULE_UI_OPTIONS,
-                key=operation_key,
-                label_visibility="collapsed",
-            )
-        with columns[2]:
-            value = st.number_input(
-                f"مقدار {definition.display_name}",
-                value=0.0,
-                key=value_key,
-                disabled=value_disabled,
-                label_visibility="collapsed",
-            )
-        converted = ui_rule_to_domain(option, value)
-        if converted:
-            rules.append(IndicatorRule(indicator_key, *converted))
-
-    st.markdown("#### استثناهای دستی")
-    names = baseline_df.assign(**{BRANCH_ID: baseline_df[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
-    branch_options = list(other_ids)
-    assigned = service.current_user.branch_id
-    if assigned in branch_options:
-        branch_options.remove(assigned)
-        branch_options.insert(0, assigned)
-    rows: list[ManualOverrideRow] = [
-        dict(row) for row in st.session_state.get("manual_override_rows", [])
-    ]
-    groups: list[dict[str, str]] = [
-        dict(group) for group in st.session_state.get("manual_override_groups", [])
-    ]
-    known_group_ids = {group["group_id"] for group in groups}
-    for row in rows:
-        if row["group_id"] not in known_group_ids:
-            groups.append({"group_id": row["group_id"], "branch_id": row["branch_id"]})
-            known_group_ids.add(row["group_id"])
-
-    add_columns = st.columns([2, 1, 3])
-    with add_columns[0]:
-        new_branch = st.selectbox(
-            "شعبه دارای استثنا",
-            branch_options,
-            format_func=lambda item: f"{names.get(item, item)} ({item})",
-            key="override_new_branch",
-        )
-    with add_columns[1]:
-        st.write("")
-        if st.button("افزودن استثنای شعبه", key="override_add_group"):
-            if any(group["branch_id"] == new_branch for group in groups):
-                st.warning("برای این شعبه قبلاً گروه استثنا ایجاد شده است.")
-            else:
-                groups.append({"group_id": str(uuid4()), "branch_id": new_branch})
-                st.session_state["manual_override_groups"] = groups
-                st.rerun()
-
-    for group in list(groups):
-        group_id = group["group_id"]
-        branch_id = group["branch_id"]
-        group_rows = [row for row in rows if row["group_id"] == group_id]
-        existing = {row["indicator_key"]: row for row in group_rows}
-        with st.expander(
-            f"{names.get(branch_id, branch_id)} ({branch_id}) — "
-            f"تعداد شاخص‌های تغییر یافته: {len(group_rows)} — ویرایش",
-            expanded=not group_rows,
-        ):
-            st.markdown("##### تنظیم شاخص‌های شعبه")
-            with st.form(f"override_group_form_{group_id}"):
-                for indicator_key, indicator in INDICATOR_REGISTRY.items():
-                    current = existing.get(indicator_key)
-                    if current:
-                        label, displayed = domain_rule_to_ui(
-                            RuleOperation(current["operation"]),
-                            float(current["input_value"]),
-                        )
-                    else:
-                        label, displayed = NO_CHANGE_LABEL, 0.0
-                    operation_key = f"exception_{branch_id}_{indicator_key}_operation"
-                    value_key = f"exception_{branch_id}_{indicator_key}_value"
-                    value_disabled = _prepare_rule_widgets(
-                        operation_key=operation_key,
-                        value_key=value_key,
-                        default_label=label,
-                        default_value=displayed,
-                    )
-                    columns = st.columns([2, 1.5, 1])
-                    with columns[0]:
-                        st.write(indicator.display_name)
-                    with columns[1]:
-                        option = st.selectbox(
-                            f"عملیات {indicator.display_name}", RULE_UI_OPTIONS,
-                            key=operation_key, label_visibility="collapsed",
-                        )
-                    with columns[2]:
-                        st.number_input(
-                            f"مقدار {indicator.display_name}", value=0.0,
-                            key=value_key,
-                            disabled=value_disabled,
-                            label_visibility="collapsed",
-                        )
-                submitted_group = st.form_submit_button("ثبت استثناهای این شعبه")
-            actions = st.columns([1, 1, 4])
-            with actions[0]:
-                st.caption("برای ویرایش، مقادیر بالا را تغییر دهید و ثبت کنید.")
-            with actions[1]:
-                delete_group = st.button("حذف", key=f"override_delete_group_{group_id}")
-            if delete_group:
-                rows = delete_override_group(rows, group_id)
-                groups = [item for item in groups if item["group_id"] != group_id]
-                st.session_state["manual_override_rows"] = rows
-                st.session_state["manual_override_groups"] = groups
-                st.rerun()
-            if submitted_group:
-                replacement: list[ManualOverrideRow] = []
-                for indicator_key in INDICATOR_REGISTRY:
-                    option = st.session_state[f"exception_{branch_id}_{indicator_key}_operation"]
-                    value = float(st.session_state[f"exception_{branch_id}_{indicator_key}_value"])
-                    converted = ui_rule_to_domain(option, value)
-                    if converted is None:
-                        continue
-                    previous = existing.get(indicator_key)
-                    replacement.append(
-                        new_override_row(
-                            branch_id=branch_id,
-                            indicator_key=indicator_key,
-                            operation=converted[0],
-                            input_value=converted[1],
-                            group_id=group_id,
-                            source="branch_exception",
-                            row_id_factory=(
-                                (lambda row_id=previous["row_id"]: row_id)
-                                if previous else (lambda: str(uuid4()))
-                            ),
-                        )
-                    )
-                rows = replace_override_group(rows, group_id, replacement)
-                st.session_state["manual_override_rows"] = rows
-                if replacement:
-                    st.success("استثناهای این شعبه ثبت شد.")
-                else:
-                    st.info("برای این شعبه تغییری ثبت نشده است.")
-
-    st.session_state["manual_override_rows"] = rows
-    st.session_state["manual_override_groups"] = groups
-    duplicates = duplicate_override_keys(rows)
-    if duplicates:
-        st.error("برای این شعبه و شاخص قبلاً استثنا ثبت شده است.")
-    branch_exception_groups = {
-        group["branch_id"]: {
-            row["indicator_key"]: {
-                "operation": row["operation"],
-                "input_value": row["input_value"],
-            }
-            for row in rows if row["group_id"] == group["group_id"]
-        }
-        for group in groups
-    }
-    st.session_state["branch_exception_groups"] = branch_exception_groups
-    overrides = to_domain_overrides(rows, default_source="branch_exception")
-    user_preview = ScenarioRuleEngine.preview(
-        [user_branch_id], baseline_df, [],
-        to_domain_overrides(user_rows, default_source="focus_branch_override")
-    )
-    network_preview = ScenarioRuleEngine.preview(other_ids, baseline_df, rules, overrides)
-    preview = RulePreview(
-        selected_branch_count=1 + len(other_ids),
-        active_bulk_rule_count=network_preview.active_bulk_rule_count,
-        unchanged_indicator_count=network_preview.unchanged_indicator_count,
-        manual_override_count=(
-            user_preview.manual_override_count + network_preview.manual_override_count
-        ),
-        generated_change_count=(
-            user_preview.generated_change_count + network_preview.generated_change_count
-        ),
-        invalid_change_count=(
-            user_preview.invalid_change_count + network_preview.invalid_change_count
-        ),
-        rows=[*user_preview.rows, *network_preview.rows],
-        changes=[*user_preview.changes, *network_preview.changes],
-        issues=[*user_preview.issues, *network_preview.issues],
-    )
-    selected_ids = [user_branch_id, *other_ids]
-    definition = {
-        "schema_version": 2,
-        "scenario_mode": st.session_state["scenario_mode"],
-        "focus_branch_id": user_branch_id,
-        "focus_branch_source": st.session_state["focus_branch_source"],
-        "selection_scope": st.session_state["selection_scope"],
-        "selection_inputs": {
-            "selected_regions": list(st.session_state["selected_regions"]),
-            "selected_branch_ids": list(selected_ids),
-        },
-        "bulk_rules": ScenarioRuleEngine.serialize_rules(rules),
-        "network_bulk_rules": ScenarioRuleEngine.serialize_rules(rules),
-        "focus_branch_overrides": serialize_override_rows(user_rows),
-        "manual_overrides": serialize_override_rows(rows),
-        "branch_exception_groups": branch_exception_groups,
-        "validation_status": "valid" if preview.is_valid else "invalid",
-    }
-    focus_changed_count = sum(
-        row.change_source == "focus_branch_override" for row in user_preview.rows
-    )
-    exception_changed_count = sum(
-        row.change_source == "branch_exception" for row in network_preview.rows
-    )
-    metrics = st.columns(6)
-    values = (
-        ("تغییرات شعبه محوری", focus_changed_count),
-        ("شعب استثنا", sum(bool(items) for items in branch_exception_groups.values())),
-        ("شاخص‌های استثنا", exception_changed_count),
-        ("قوانین فعال شبکه", preview.active_bulk_rule_count),
-        ("تغییرات تولیدشده", preview.generated_change_count),
-        ("خطاها", preview.invalid_change_count),
-    )
-    for column, (label, value) in zip(metrics, values):
-        with column:
-            st.metric(label, value)
-    show_all = st.checkbox("نمایش ردیف‌های بدون تغییر", value=False)
-    user_df = pd.DataFrame([row.__dict__ for row in user_preview.rows])
-    network_df = pd.DataFrame([row.__dict__ for row in network_preview.rows])
-    if not show_all:
-        if not user_df.empty:
-            user_df = user_df.loc[
-                user_df["final_value"].ne(user_df["baseline_value"])
-                | user_df["validation_status"].eq("invalid")
-            ]
-        if not network_df.empty:
-            network_df = network_df.loc[
-                network_df["final_value"].ne(network_df["baseline_value"])
-                | network_df["validation_status"].eq("invalid")
-            ]
-    source_labels = {
-        "baseline": "baseline",
-        "bulk_rule": "network_bulk_rule",
-        "manual_override": "branch_exception",
-    }
-    if not user_df.empty:
-        user_df["change_source"] = user_df["change_source"].replace(
-            {"manual_override": "focus_branch_override"}
-        )
-    if not network_df.empty:
-        network_df["change_source"] = network_df["change_source"].replace(source_labels)
-    st.markdown(
-        "#### تغییرات شعبه من"
-        if st.session_state.get("focus_branch_source") == "ASSIGNED_USER_BRANCH"
-        else "#### تغییرات شعبه محوری تحلیل"
-    )
-    if user_df.empty:
-        st.caption("تغییری ثبت نشده است.")
-    else:
-        st.dataframe(user_df, width="stretch", height=280)
-    st.markdown("#### تغییرات قاعده عمومی شبکه")
-    bulk_df = network_df.loc[network_df["change_source"].eq("network_bulk_rule")] if not network_df.empty else network_df
-    if bulk_df.empty:
-        st.caption("تغییری ثبت نشده است.")
-    else:
-        st.dataframe(bulk_df, width="stretch", height=280)
-    st.markdown("#### استثناهای شعب")
-    exception_df = network_df.loc[network_df["change_source"].eq("branch_exception")] if not network_df.empty else network_df
-    if exception_df.empty:
-        st.caption("استثنایی ثبت نشده است.")
-    else:
-        st.dataframe(exception_df, width="stretch", height=280)
-    if preview.issues:
-        st.error(
-            f"{preview.invalid_change_count} تغییر در {preview.invalid_branch_count} شعبه "
-            "نامعتبر است و اجرای سناریو مسدود شده است."
-        )
-        with st.expander("جزئیات خطاهای اعتبارسنجی"):
-            st.dataframe(pd.DataFrame([issue.__dict__ for issue in preview.issues]), width="stretch")
-    return preview, definition
+ROOT = Path(__file__).resolve().parents[1]
+DATA_FILE = ROOT / "Data.xlsx"
+PERIOD = "1404-04"
+LOGGER = logging.getLogger(__name__)
+OPERATIONS = tuple(OPERATION_LABELS)
+SCOPES = tuple(SCOPE_LABELS)
 
 
 @st.cache_data(show_spinner="در حال بارگذاری و محاسبه اطلاعات مبنا...")
-def load_baseline_data(data_file: Path) -> tuple[pd.DataFrame, ModelOutputs]:
-    """Load repository data and cache its single baseline-model calculation."""
-    return load_dashboard_data(data_file, MODEL_PERIOD)
+def load_baseline():
+    return load_dashboard_data(DATA_FILE, PERIOD)
 
 
 @st.cache_resource
-def get_scenario_service(project_root: Path) -> ScenarioManagementService:
-    """Create the local persistence service without retaining a DB connection."""
-    return create_local_scenario_service(project_root)
+def workspace_service() -> ScenarioWorkspaceService:
+    return ScenarioWorkspaceService(create_local_scenario_service(ROOT))
 
 
-def reset_scenario() -> None:
-    """Streamlit callback for a local scenario reset."""
-    reset_scenario_state(st.session_state)
-
-
-def _settings(
-    baseline_df: pd.DataFrame, service: ScenarioManagementService
-) -> tuple[str, str | None, list[str], list[str]]:
-    """Render top-of-page scenario settings."""
-    if "_scenario_name_input" not in st.session_state:
-        st.session_state["_scenario_name_input"] = st.session_state["scenario_name"]
-    name_column, period_column, reset_column = st.columns([2.5, 1, 1])
-    with name_column:
-        scenario_name = st.text_input(
-            "نام سناریو",
-            key="_scenario_name_input",
-            placeholder="برای مثال: رشد ۱۰ درصدی سپرده‌ها",
-        )
-    with period_column:
-        st.selectbox("دوره انتخابی", options=[MODEL_PERIOD], disabled=True)
-    with reset_column:
-        st.write("")
-        st.write("")
-        st.button("بازنشانی", width="stretch", on_click=reset_scenario)
-
-    user = service.current_user
-    all_ids = baseline_df[BRANCH_ID].astype(str).tolist()
-    names = baseline_df.assign(**{BRANCH_ID: baseline_df[BRANCH_ID].astype(str)}).set_index(
-        BRANCH_ID
-    )[BRANCH_NAME].to_dict()
-    persisted_focus = (
-        st.session_state.get("focus_branch_id")
-        if st.session_state.get("current_scenario_record") is not None
-        else None
-    )
-    persisted_source = (
-        st.session_state.get("focus_branch_source") if persisted_focus else None
-    )
-    staff_selection = None
-    if not user.branch_id and not persisted_focus:
-        staff_selection = st.selectbox(
-            "شعبه محوری تحلیل",
-            options=[None, *all_ids],
-            format_func=lambda branch_id: (
-                "انتخاب شعبه" if branch_id is None
-                else f"{names[branch_id]} ({branch_id})"
-            ),
-            key="_focus_branch_input",
-        )
-    try:
-        focus = resolve_focus_branch(
-            user,
-            baseline_df,
-            selected_branch_id=staff_selection,
-            persisted_branch_id=persisted_focus,
-            persisted_source=persisted_source,
-        )
-    except ValueError as exc:
-        st.warning(str(exc))
-        return scenario_name, None, [], []
-    if focus is None:
-        st.info("برای شروع، شعبه محوری تحلیل را انتخاب کنید.")
-        return scenario_name, None, [], []
-    focus_branch_id = focus.branch_id
-    st.session_state["focus_branch_id"] = focus.branch_id
-    st.session_state["focus_branch_source"] = focus.source.value
-    focus_label = "شعبه من" if user.branch_id else "شعبه محوری تحلیل"
-    st.caption(
-        f"{focus_label}: {names[focus_branch_id]} — "
-        f"کد {(user.branch_code or focus_branch_id) if user.branch_id else focus_branch_id}"
-    )
-    mode_labels = scenario_mode_labels(user)
-    mode = st.radio(
-        "رفتار سایر شعب در سناریو چگونه باشد؟",
-        options=list(mode_labels),
-        format_func=mode_labels.get,
-        horizontal=True,
-        key="_scenario_mode_input",
-    )
-    st.session_state["scenario_mode"] = mode
-    if mode == "ONLY_USER_BRANCH":
-        st.session_state["selection_scope"] = SelectionScope.USER_BRANCH.value
-        st.session_state["selected_regions"] = []
-        st.session_state["selected_branch_ids"] = [focus_branch_id]
-        return scenario_name, focus_branch_id, [], [focus_branch_id]
-
-    st.markdown("#### دامنه تغییر سایر شعب")
-    scope = st.radio(
-        "دامنه تغییر سایر شعب",
-        options=list(OTHER_SCOPE_LABELS),
-        format_func=OTHER_SCOPE_LABELS.get,
-        horizontal=True,
-        key="_other_selection_scope_input",
-        label_visibility="collapsed",
-    )
-    st.session_state["selection_scope"] = scope.value
-
-    if scope is SelectionScope.SELECTED_BRANCHES:
-        current = st.session_state.get(
-            "_selected_branch_ids_input", st.session_state["selected_branch_ids"]
-        )
-        st.session_state["_selected_branch_ids_input"] = [
-            item for item in current if item in set(all_ids) and item != focus_branch_id
-        ]
-        manual_ids = st.multiselect(
-            "انتخاب شعب",
-            options=[item for item in all_ids if item != focus_branch_id],
-            format_func=lambda branch_id: f"{names[branch_id]} ({branch_id})",
-            key="_selected_branch_ids_input",
-            placeholder="نام یا کد شعبه را جست‌وجو کنید",
-        )
-        selected_regions: list[str] = []
-    elif scope is SelectionScope.SELECTED_REGIONS:
-        region_options = sorted(baseline_df[REGION].astype(str).unique().tolist())
-        selected_regions = st.multiselect(
-            "انتخاب مناطق",
-            options=region_options,
-            key="_selected_regions_input",
-        )
-        manual_ids = []
-    elif scope is SelectionScope.ALL_BRANCHES:
-        selected_regions = []
-        manual_ids = []
-
-    try:
-        other_ids = SelectionResolver.resolve(
-            scope,
-            baseline_df,
-            service.current_user,
-            selected_branch_ids=manual_ids,
-            selected_regions=selected_regions,
-        )
-    except SelectionResolutionError as exc:
-        st.info(str(exc))
-        other_ids = []
-
-    other_ids = [item for item in other_ids if item != focus_branch_id]
-    selected_ids = [focus_branch_id, *other_ids]
-
-    st.session_state["selected_regions"] = list(selected_regions)
-    st.session_state["selected_branch_ids"] = list(selected_ids)
-    summary = f"تعداد سایر شعب: {len(other_ids)} | مجموع شعب تحت تغییر: {len(selected_ids)}"
-    if scope is SelectionScope.SELECTED_REGIONS:
-        summary += f" | تعداد مناطق منتخب: {len(selected_regions)}"
-    st.caption(summary)
-    return scenario_name, focus_branch_id, other_ids, selected_ids
-
-
-def render_persistence_status(service: ScenarioManagementService) -> None:
-    """Show owner, status, last update, and technical persistence identity."""
-    record: ScenarioRecord | None = st.session_state["current_scenario_record"]
-    owner = record.owner_display_name if record else service.current_user.display_name
-    status_labels = {"draft": "پیش‌نویس", "executed": "اجراشده", "archived": "بایگانی‌شده"}
-    columns = st.columns(3)
-    with columns[0]:
-        st.caption(f"مالک: {owner}")
-    with columns[1]:
-        st.caption(f"وضعیت: {status_labels.get(record.status, 'ذخیره‌نشده') if record else 'ذخیره‌نشده'}")
-    with columns[2]:
-        updated = record.updated_at.astimezone().strftime("%Y-%m-%d %H:%M") if record else "—"
-        st.caption(f"آخرین ویرایش: {updated}")
-    if record is not None:
-        with st.expander("اطلاعات فنی سناریو"):
-            st.code(
-                f"scenario_id: {record.scenario_id}\nrow_version: {record.row_version}",
-                language=None,
-            )
-
-
-def render_baseline_summary(
-    final_result: pd.DataFrame, selected_branch_ids: list[str]
-) -> None:
-    """Render single-branch KPIs or a multi-branch baseline table."""
-    selected = final_result.loc[
-        final_result[BRANCH_ID].isin(selected_branch_ids),
-        [BRANCH_ID, BRANCH_NAME, REGION, "final_score", "rank", "grade"],
-    ].copy()
-    order = {branch_id: position for position, branch_id in enumerate(selected_branch_ids)}
-    selected["_order"] = selected[BRANCH_ID].map(order)
-    selected = selected.sort_values("_order").drop(columns="_order")
-    st.subheader("وضعیت مبنای شعب منتخب")
-    def render_branch(row: pd.Series) -> None:
-        groups = st.columns(2)
-        with groups[0]:
-            render_kpi_group(
-                "مشخصات شعبه",
-                (
-                    ("نام شعبه", row[BRANCH_NAME], None, "off"),
-                    ("کد شعبه", row[BRANCH_ID], None, "off"),
-                    ("منطقه", row[REGION], None, "off"),
-                ),
-            )
-        with groups[1]:
-            render_kpi_group(
-                "وضعیت مبنا",
-                (
-                    ("امتیاز", format_score(row["final_score"]), None, "off"),
-                    ("رتبه", format_rank(row["rank"]), None, "off"),
-                    ("درجه", format_grade(row["grade"]), None, "off"),
-                ),
-            )
-
-    if len(selected) == 1:
-        render_branch(selected.iloc[0])
-        return
-    selected["final_score"] = selected["final_score"].map(format_score)
-    selected["rank"] = selected["rank"].map(format_rank)
-    selected["grade"] = selected["grade"].map(format_grade)
-    render_table(
-        selected.rename(
-            columns={
-                BRANCH_ID: "کد شعبه",
-                BRANCH_NAME: "نام شعبه",
-                REGION: "منطقه",
-                "final_score": "امتیاز مبنا",
-                "rank": "رتبه مبنا",
-                "grade": "درجه مبنا",
-            }
-        ),
-        height=min(360, 52 + len(selected) * 36),
-        column_config={
-            "کد شعبه": st.column_config.TextColumn(width="small"),
-            "نام شعبه": st.column_config.TextColumn(width="medium"),
-            "منطقه": st.column_config.TextColumn(width="medium"),
-            "امتیاز مبنا": st.column_config.TextColumn(width="small"),
-            "رتبه مبنا": st.column_config.TextColumn(width="small"),
-            "درجه مبنا": st.column_config.TextColumn(width="small"),
-        },
-    )
-
-
-def _write_row_widget_state(row: dict[str, object]) -> None:
-    """Synchronize one reset row with its three stable Streamlit widget keys."""
-    branch_id = str(row[BRANCH_ID])
-    indicator_key = str(row["indicator_key"])
-    st.session_state[indicator_widget_key(branch_id, indicator_key, "edit_mode")] = row[
-        "edit_mode"
-    ]
-    st.session_state[
-        indicator_widget_key(branch_id, indicator_key, "change_percent")
-    ] = row["change_percent"]
-    st.session_state[
-        indicator_widget_key(branch_id, indicator_key, "scenario_value")
-    ] = row["scenario_value"]
-
-
-def _reset_editor_row(branch_id: str, indicator_key: str) -> None:
-    state = reset_indicator_row(
-        st.session_state["indicator_editor_state"], branch_id, indicator_key
-    )
-    st.session_state["indicator_editor_state"] = state
-    _write_row_widget_state(state[f"{branch_id}:{indicator_key}"])
-
-
-def _reset_editor_all() -> None:
-    state = reset_all_indicator_rows(st.session_state["indicator_editor_state"])
-    st.session_state["indicator_editor_state"] = state
-    for row in state.values():
-        _write_row_widget_state(row)
-
-
-def _clear_editor_widget_state() -> None:
-    suffixes = ("_edit_mode", "_change_percent", "_scenario_value")
-    for key in list(st.session_state):
-        if key.startswith("scenario_") and key.endswith(suffixes):
-            st.session_state.pop(key, None)
-
-
-def render_scenario_editor(
-    editor_state: dict[str, dict[str, object]], *, can_update: bool = True
-) -> tuple[dict[str, dict[str, object]], bool, bool]:
-    """Render explicit row controls with one authoritative input per indicator."""
-    heading, reset_column = st.columns([5, 1])
-    with heading:
-        st.subheader("ویرایش شاخص‌های سناریو")
-        st.caption(
-            "برای هر شاخص روش درصدی یا ورود مستقیم را انتخاب کنید. مقدار غیرفعال "
-            "به‌صورت خودکار محاسبه می‌شود."
-        )
-    with reset_column:
-        st.write("")
-        st.button(
-            "بازنشانی همه شاخص‌ها",
-            key="_reset_all_indicators",
-            on_click=_reset_editor_all,
-            width="stretch",
-        )
-
-    branch_ids = list(dict.fromkeys(str(row[BRANCH_ID]) for row in editor_state.values()))
-    branch_names = {
-        str(row[BRANCH_ID]): str(row[BRANCH_NAME]) for row in editor_state.values()
-    }
-    tabs = (
-        st.tabs([f"{branch_names[item]} ({item})" for item in branch_ids])
-        if len(branch_ids) > 1
-        else [st.container()]
-    )
-    current = {key: dict(value) for key, value in editor_state.items()}
-    for tab, branch_id in zip(tabs, branch_ids):
-        with tab:
-            headers = st.columns([2.2, 1.5, 1.35, 1.45, 1.65, 1.35, 0.75])
-            for column, label in zip(
-                headers,
-                ("شاخص", "مقدار مبنا", "روش ویرایش", "درصد تغییر", "مقدار سناریو", "تغییر عددی", ""),
-            ):
-                column.caption(label)
-            for indicator_key in INDICATOR_ORDER:
-                row_id = f"{branch_id}:{indicator_key}"
-                row = current[row_id]
-                baseline = float(row["baseline_value"])
-                mode_key = indicator_widget_key(branch_id, indicator_key, "edit_mode")
-                percent_key = indicator_widget_key(
-                    branch_id, indicator_key, "change_percent"
-                )
-                value_key = indicator_widget_key(
-                    branch_id, indicator_key, "scenario_value"
-                )
-                st.session_state.setdefault(mode_key, str(row["edit_mode"]))
-                st.session_state.setdefault(percent_key, row["change_percent"])
-                st.session_state.setdefault(value_key, float(row["scenario_value"]))
-
-                columns = st.columns([2.2, 1.5, 1.35, 1.45, 1.65, 1.35, 0.75])
-                columns[0].write(str(row["indicator_name"]))
-                columns[1].write(format_raw_value(baseline))
-                with columns[2]:
-                    mode = st.selectbox(
-                        "روش ویرایش",
-                        options=["percent", "direct"],
-                        format_func=lambda item: "درصدی" if item == "percent" else "مقداری",
-                        key=mode_key,
-                        label_visibility="collapsed",
-                    )
-
-                if mode == "percent":
-                    if not isinstance(st.session_state.get(percent_key), (int, float)):
-                        st.session_state[percent_key] = 0.0
-                    with columns[3]:
-                        percent = st.number_input(
-                            "درصد تغییر",
-                            key=percent_key,
-                            format="%.2f",
-                            label_visibility="collapsed",
-                        )
-                    scenario_value = calculate_scenario_value(baseline, float(percent))
-                    st.session_state[value_key] = scenario_value
-                    with columns[4]:
-                        st.number_input(
-                            "مقدار سناریو",
-                            key=value_key,
-                            disabled=True,
-                            format="%.2f",
-                            label_visibility="collapsed",
-                        )
-                else:
-                    if not isinstance(st.session_state.get(value_key), (int, float)):
-                        st.session_state[value_key] = baseline
-                    with columns[4]:
-                        scenario_value = st.number_input(
-                            "مقدار سناریو",
-                            key=value_key,
-                            format="%.2f",
-                            label_visibility="collapsed",
-                        )
-                    percent = calculate_change_percent(baseline, float(scenario_value))
-                    st.session_state[percent_key] = percent if percent is not None else "—"
-                    with columns[3]:
-                        if percent is None:
-                            st.text_input(
-                                "درصد تغییر",
-                                key=percent_key,
-                                disabled=True,
-                                label_visibility="collapsed",
-                            )
-                        else:
-                            st.number_input(
-                                "درصد تغییر",
-                                key=percent_key,
-                                disabled=True,
-                                format="%.2f",
-                                label_visibility="collapsed",
-                            )
-
-                absolute_change = float(scenario_value) - baseline
-                color = "#16794f" if absolute_change > 0 else "#b42318" if absolute_change < 0 else "inherit"
-                sign = "+" if absolute_change > 0 else ""
-                columns[5].markdown(
-                    f"<span style='color:{color};font-weight:600'>{sign}{format_raw_value(absolute_change)}</span>",
-                    unsafe_allow_html=True,
-                )
-                with columns[6]:
-                    st.button(
-                        "↺",
-                        key=indicator_widget_key(branch_id, indicator_key, "reset"),
-                        help="بازنشانی این شاخص",
-                        on_click=_reset_editor_row,
-                        args=(branch_id, indicator_key),
-                    )
-                if baseline == 0 and mode == "percent":
-                    st.caption(
-                        "برای مقدار مبنای صفر، ورود درصدی اثری ندارد؛ مقدار سناریو را مستقیم وارد کنید."
-                    )
-                row.update(
-                    edit_mode=mode,
-                    change_percent=percent,
-                    scenario_value=float(scenario_value),
-                    absolute_change=absolute_change,
-                )
-
-    synchronized = update_indicator_editor_state(current)
-    st.session_state["indicator_editor_state"] = synchronized
-    actions = st.columns([1, 1, 3])
-    with actions[0]:
-        submitted = st.button("اجرای سناریو", type="primary", width="content")
-    with actions[1]:
-        save_draft = st.button(
-            "ذخیره پیش‌نویس", width="content", disabled=not can_update
-        )
-    return synchronized, submitted, save_draft
-
-
-def _store_saved_record(record: ScenarioRecord) -> None:
-    """Update the three persistence identity keys after a successful save."""
-    st.session_state["current_scenario_id"] = record.scenario_id
-    st.session_state["current_scenario_row_version"] = record.row_version
-    st.session_state["current_scenario_dirty"] = False
-    st.session_state["current_scenario_record"] = record
-
-
-def _save_draft(
-    service: ScenarioManagementService,
-    changes: list,
-    definition: dict[str, object],
-    scenario_name: str,
-    selected_ids: list[str],
-) -> None:
-    record = service.save_draft(
-        scenario_name=scenario_name,
-        baseline_period=MODEL_PERIOD,
-        selected_branch_ids=selected_ids,
-        changes=changes,
-        summary={"scenario_definition": definition},
-        scenario_id=st.session_state["current_scenario_id"],
-        expected_row_version=st.session_state["current_scenario_row_version"],
-    )
-    _store_saved_record(record)
-    st.session_state.update(
-        {
-            "scenario_name": scenario_name.strip(),
-            "selected_branch_ids": list(selected_ids),
-            "scenario_changes": changes,
-            "scenario_dataframe": None,
-            "scenario_outputs": None,
-            "comparison_results": None,
-            "scenario_executed": False,
-            "scenario_definition": definition,
-            "loaded_scenario_changes": changes,
-            "loaded_scenario_edit_modes": {},
-        }
-    )
-
-
-def _save_executed(
-    service: ScenarioManagementService,
-    *,
-    save_as_new: bool,
-) -> ScenarioRecord:
-    record = service.save_executed(
-        scenario_name=st.session_state["scenario_name"],
-        baseline_period=MODEL_PERIOD,
-        selected_branch_ids=st.session_state["selected_branch_ids"],
-        changes=st.session_state["scenario_changes"],
-        comparison=st.session_state["comparison_results"],
-        summary={"scenario_definition": st.session_state["scenario_definition"]},
-        scenario_id=st.session_state["current_scenario_id"],
-        expected_row_version=st.session_state["current_scenario_row_version"],
-        save_as_new=save_as_new,
-    )
-    _store_saved_record(record)
-    return record
-
-
-def _show_persistence_error(exc: Exception) -> None:
+def _persistence_error(exc: Exception) -> None:
     if isinstance(exc, ConcurrencyError):
-        st.error(
-            "این سناریو در نشست دیگری تغییر کرده است. صفحه سناریوهای ذخیره‌شده را "
-            "بازخوانی کنید و دوباره تلاش کنید."
-        )
-    elif isinstance(exc, (ValueError, ScenarioPersistenceError)):
-        st.error(str(exc))
+        st.session_state["sensitivity_persistence_conflict"] = True
+        st.error("این سناریو پس از بازشدن شما توسط کاربر یا نشست دیگری تغییر کرده است. برای جلوگیری از بازنویسی اطلاعات، نسخه جدید را بارگذاری کنید.")
+    elif isinstance(exc, (ScenarioPersistenceError, ValueError)):
+        LOGGER.warning("Scenario persistence failure: %s", exc)
+        st.error("ذخیره یا بارگذاری سناریو انجام نشد. لطفاً اطلاعات را بازبینی و دوباره تلاش کنید.")
     else:
-        st.error("ذخیره سناریو انجام نشد. لطفاً دوباره تلاش کنید.")
+        LOGGER.exception("Unexpected scenario persistence failure")
+        st.error("عملیات ذخیره‌سازی با خطای پیش‌بینی‌نشده روبه‌رو شد.")
 
 
-def _change_delta(value: float, formatter) -> tuple[str | None, str]:
-    """Return a native metric delta and its neutral/color mode."""
-    if value == 0:
-        return "بدون تغییر", "off"
-    return formatter(value), "normal"
+def _save_draft(draft, *, save_as_new: bool = False) -> None:
+    try:
+        workspace_service().save_draft(draft, save_as_new=save_as_new)
+    except Exception as exc:
+        _persistence_error(exc)
+    else:
+        st.session_state["sensitivity_persistence_conflict"] = False
+        st.success("پیش‌نویس ذخیره شد")
 
 
-def _render_branch_kpis(row: pd.Series) -> None:
-    score_delta, score_color = _change_delta(float(row["score_change"]), format_score)
-    rank_delta, rank_color = _change_delta(float(row["rank_change"]), format_rank_change)
-    if float(row["rank_change"]) < 0:
-        rank_color = "inverse"
-    groups = st.columns(3)
-    with groups[0]:
-        render_kpi_group(
-            "امتیاز",
-            (
-                ("مبنا", format_score(row["baseline_score"]), None, "off"),
-                ("سناریو", format_score(row["scenario_score"]), None, "off"),
-                ("تغییر", format_score(row["score_change"]), score_delta, score_color),
-            ),
-        )
-    with groups[1]:
-        render_kpi_group(
-            "رتبه",
-            (
-                ("مبنا", format_rank(row["baseline_rank"]), None, "off"),
-                ("سناریو", format_rank(row["scenario_rank"]), None, "off"),
-                ("تغییر", format_rank_change(row["rank_change"]), rank_delta, rank_color),
-            ),
-        )
-    with groups[2]:
-        render_kpi_group(
-            "درجه",
-            (
-                ("مبنا", format_grade(row["baseline_grade"]), None, "off"),
-                ("سناریو", format_grade(row["scenario_grade"]), None, "off"),
-            ),
-        )
+def _save_execution(draft) -> None:
+    try:
+        workspace_service().save_execution(draft)
+    except Exception as exc:
+        _persistence_error(exc)
+    else:
+        st.success("نتیجه رسمی سناریو ذخیره شد")
 
 
-def _indicator_tables(indicators: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    result = indicators.copy()
-    order = {key: index for index, key in enumerate(INDICATOR_ORDER)}
-    result["_order"] = result["indicator_key"].map(order)
-    result = result.sort_values("_order")
-    result["indicator_key"] = result["indicator_key"].map(INDICATOR_LABELS)
-    values = result.loc[
-        :,
-        [
-            "indicator_key",
-            "baseline_raw_value",
-            "scenario_raw_value",
-            "raw_value_change",
-            "raw_value_change_pct",
-        ],
-    ].rename(
-        columns={
-            "indicator_key": "شاخص",
-            "baseline_raw_value": "مقدار مبنا",
-            "scenario_raw_value": "مقدار سناریو",
-            "raw_value_change": "تغییر",
-            "raw_value_change_pct": "درصد تغییر",
-        }
-    )
-    values["مقدار مبنا"] = values["مقدار مبنا"].map(format_raw_value)
-    values["مقدار سناریو"] = values["مقدار سناریو"].map(format_raw_value)
-    values["تغییر"] = values["تغییر"].map(format_raw_value)
-    values["درصد تغییر"] = values["درصد تغییر"].map(
-        lambda value: format_percentage(value, decimals=2)
-    )
-    scores = result.loc[
-        :,
-        [
-            "indicator_key",
-            "baseline_score",
-            "scenario_score",
-            "baseline_weighted_score",
-            "scenario_weighted_score",
-            "baseline_indicator_rank",
-            "scenario_indicator_rank",
-            "indicator_rank_change",
-        ],
-    ].rename(
-        columns={
-            "indicator_key": "شاخص",
-            "baseline_score": "امتیاز نرمال‌شده مبنا",
-            "scenario_score": "امتیاز نرمال‌شده سناریو",
-            "baseline_weighted_score": "امتیاز وزن‌دار مبنا",
-            "scenario_weighted_score": "امتیاز وزن‌دار سناریو",
-            "baseline_indicator_rank": "رتبه مبنا",
-            "scenario_indicator_rank": "رتبه سناریو",
-            "indicator_rank_change": "تغییر رتبه",
-        }
-    )
-    for column in (
-        "امتیاز نرمال‌شده مبنا",
-        "امتیاز نرمال‌شده سناریو",
-        "امتیاز وزن‌دار مبنا",
-        "امتیاز وزن‌دار سناریو",
-    ):
-        scores[column] = scores[column].map(format_score)
-    scores["رتبه مبنا"] = scores["رتبه مبنا"].map(format_rank)
-    scores["رتبه سناریو"] = scores["رتبه سناریو"].map(format_rank)
-    scores["تغییر رتبه"] = scores["تغییر رتبه"].map(format_rank_change)
-    return values, scores
-
-
-def _render_indicator_charts(
-    indicator_comparison: pd.DataFrame,
-    indicators: pd.DataFrame,
-    selected_branch_id: str,
-) -> None:
-    score_data = prepare_selected_indicator_scores(
-        indicator_comparison, selected_branch_id
-    )
-    validate_indicator_score_chart_matches_table(score_data, indicators)
-    score_figure = build_selected_indicator_score_chart(score_data)
-    render_chart(
-        score_figure, key=f"selected_branch_indicator_comparison_{selected_branch_id}"
-    )
-
-    chart_data = indicators.copy()
-    order = {key: index for index, key in enumerate(INDICATOR_ORDER)}
-    chart_data["_order"] = chart_data["indicator_key"].map(order)
-    chart_data = chart_data.sort_values("_order")
-    labels = chart_data["indicator_key"].map(INDICATOR_LABELS)
-    rank_figure = build_indicator_rank_lollipop(
-        labels,
-        chart_data["indicator_rank_change"],
-    )
-    render_chart(
-        rank_figure, key=f"selected_branch_indicator_rank_{selected_branch_id}"
-    )
-
-
-def _select_result_branch(branch_id: str) -> None:
-    st.session_state["_selected_result_branch_id"] = branch_id
-
-
-def render_selected_branch_results(
-    comparison, selected_ids: list[str], preferred_branch_id: str | None = None
-) -> None:
-    """Render one searchable, ordered selected-branch result at a time."""
-    branches = selected_branch_results(comparison, selected_ids)
-    region_options = sorted(branches[REGION].astype(str).unique().tolist())
-    grade_options = sorted(branches["scenario_grade"].astype(str).unique().tolist())
-    filters = st.columns(2)
-    with filters[0]:
-        region_filter = st.selectbox(
-            "فیلتر منطقه", [None, *region_options],
-            format_func=lambda item: "همه مناطق" if item is None else item,
-            key="_result_region_filter",
-        )
-    with filters[1]:
-        grade_filter = st.selectbox(
-            "فیلتر درجه", [None, *grade_options],
-            format_func=lambda item: "همه درجات" if item is None else format_grade(item),
-            key="_result_grade_filter",
-        )
-    filtered = branches
-    if region_filter is not None:
-        filtered = filtered.loc[filtered[REGION].eq(region_filter)]
-    if grade_filter is not None:
-        filtered = filtered.loc[filtered["scenario_grade"].eq(grade_filter)]
-    ordered_ids = filtered[BRANCH_ID].astype(str).tolist()
-    if not ordered_ids:
-        render_empty_state("شعبه‌ای مطابق فیلترهای انتخاب‌شده وجود ندارد.")
+def _reload_saved(draft, data) -> None:
+    scenario_id = dict(draft.get("persistence") or {}).get("scenario_id")
+    if not scenario_id:
         return
-    current = retain_selected_branch(
-        ordered_ids,
-        st.session_state.get("_selected_result_branch_id") or preferred_branch_id,
-    )
-    assert current is not None
-    st.session_state["_selected_result_branch_id"] = current
-    labels = filtered.set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
-    selected_id = st.selectbox(
-        "جست‌وجو و انتخاب شعبه",
-        ordered_ids,
-        format_func=lambda item: f"{labels[item]} ({item})",
-        key="_selected_result_branch_id",
-    )
-    position = ordered_ids.index(selected_id)
-    navigation = st.columns([1, 1, 3])
-    with navigation[0]:
-        st.button(
-            "شعبه قبلی", on_click=_select_result_branch,
-            args=(adjacent_branch_id(ordered_ids, selected_id, step=-1),),
-            width="stretch",
+    try:
+        loaded = workspace_service().load_scenario(
+            scenario_id, branch_ids=data[BRANCH_ID].astype(str), periods=[PERIOD]
         )
-    with navigation[1]:
-        st.button(
-            "شعبه بعدی", on_click=_select_result_branch,
-            args=(adjacent_branch_id(ordered_ids, selected_id, step=1),),
-            width="stretch",
-        )
-    with navigation[2]:
-        st.caption(f"شعبه {position + 1} از {len(ordered_ids)}")
-    branch = filtered.loc[filtered[BRANCH_ID].astype(str).eq(selected_id)].iloc[0]
-    st.markdown(f"### {branch[BRANCH_NAME]} — کد {branch[BRANCH_ID]}")
-    st.caption(f"منطقه: {branch[REGION]} | درجه سناریو: {format_grade(branch['scenario_grade'])}")
-    _render_branch_kpis(branch)
-    network = comparison.branch_comparison
-    region_rows = network.loc[network[REGION].eq(branch[REGION])].copy()
-    region_rows["scenario_region_rank"] = region_rows["scenario_score"].rank(
-        method="min", ascending=False
-    ).astype(int)
-    region_rank = int(
-        region_rows.loc[
-            region_rows[BRANCH_ID].astype(str).eq(selected_id), "scenario_region_rank"
-        ].iloc[0]
-    )
-    better = network.loc[network["scenario_rank"].lt(branch["scenario_rank"])]
-    next_better_gap = (
-        float(better.sort_values("scenario_rank", ascending=False).iloc[0]["scenario_score"])
-        - float(branch["scenario_score"])
-        if not better.empty else 0.0
-    )
-    overtaken = network.loc[
-        network["baseline_rank"].lt(branch["baseline_rank"])
-        & network["scenario_rank"].gt(branch["scenario_rank"])
-    ]
-    overtook_user = network.loc[
-        network["baseline_rank"].gt(branch["baseline_rank"])
-        & network["scenario_rank"].lt(branch["scenario_rank"])
-    ]
-    st.markdown("#### جایگاه در شبکه")
-    context_columns = st.columns(3)
-    context_values = (
-        ("رتبه در کل بانک", format_rank(branch["scenario_rank"])),
-        ("رتبه در منطقه", format_rank(region_rank)),
-        ("فاصله تا رتبه بهتر", format_score(next_better_gap)),
-        (
-            "فاصله تا میانگین شبکه",
-            format_score(float(branch["scenario_score"]) - float(network["scenario_score"].mean())),
-        ),
-        ("شعب پشت سر گذاشته‌شده", format_number(len(overtaken))),
-        ("شعب عبورکرده از شعبه من", format_number(len(overtook_user))),
-        (
-            "کل شعب دارای تغییر رتبه",
-            format_number(int(network["rank_change"].ne(0).sum())),
-        ),
-    )
-    for index, (label, value) in enumerate(context_values):
-        with context_columns[index % 3]:
-            st.metric(label, value)
-    indicators = comparison.indicator_comparison.loc[
-        comparison.indicator_comparison[BRANCH_ID].astype(str).eq(selected_id)
-    ].copy()
-    st.subheader("مقایسه شاخص‌ها")
-    values, scores = _indicator_tables(indicators)
-    value_tab, score_tab = st.tabs(["مقادیر خام شاخص‌ها", "امتیاز نرمال و رتبه شاخص‌ها"])
-    with value_tab:
-        render_indicator_values_table(values)
-    with score_tab:
-        render_indicator_scores_table(scores)
-    drivers = indicators.loc[indicators["weighted_score_change"].ne(0)].copy()
-    if not drivers.empty:
-        drivers["indicator_name"] = drivers["indicator_key"].map(INDICATOR_LABELS)
-        drivers = drivers.sort_values(
-            "weighted_score_change", key=lambda series: series.abs(), ascending=False
-        ).head(5)
-        st.markdown("#### عوامل اصلی بهبود یا افت")
-        st.dataframe(
-            drivers.loc[:, ["indicator_name", "weighted_score_change"]].rename(
-                columns={
-                    "indicator_name": "شاخص",
-                    "weighted_score_change": "تغییر امتیاز وزن‌دار",
-                }
-            ),
-            width="stretch",
-        )
-    _render_indicator_charts(comparison.indicator_comparison, indicators, selected_id)
+    except Exception as exc:
+        _persistence_error(exc)
+    else:
+        st.session_state[SENSITIVITY_DRAFT_KEY] = loaded.draft
+        st.session_state["sensitivity_restore_warnings"] = list(loaded.warnings)
+        st.session_state["sensitivity_persistence_conflict"] = False
+        st.rerun()
 
 
-def _network_display_tables(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    important_columns = {
-        BRANCH_ID: "کد شعبه",
-        BRANCH_NAME: "نام شعبه",
-        REGION: "منطقه",
-        "baseline_rank": "رتبه مبنا",
-        "scenario_rank": "رتبه سناریو",
-        "rank_change": "تغییر رتبه",
-        "baseline_grade": "درجه مبنا",
-        "scenario_grade": "درجه سناریو",
-    }
-    important = frame.loc[:, list(important_columns)].rename(columns=important_columns).copy()
-    important["درجه مبنا"] = important["درجه مبنا"].map(format_grade)
-    important["درجه سناریو"] = important["درجه سناریو"].map(format_grade)
-    detail_columns = {
-        BRANCH_ID: "کد شعبه",
-        BRANCH_NAME: "نام شعبه",
-        "baseline_score": "امتیاز مبنا",
-        "scenario_score": "امتیاز سناریو",
-        "score_change": "تغییر امتیاز",
-        "grade_changed": "تغییر درجه",
-    }
-    details = frame.loc[:, list(detail_columns)].rename(columns=detail_columns).copy()
-    details["امتیاز مبنا"] = details["امتیاز مبنا"].map(format_score)
-    details["امتیاز سناریو"] = details["امتیاز سناریو"].map(format_score)
-    details["تغییر امتیاز"] = details["تغییر امتیاز"].map(format_score)
-    details["تغییر درجه"] = details["تغییر درجه"].map({True: "بله", False: "خیر"})
-    return important, details
+def _branch_maps(data: pd.DataFrame) -> tuple[list[str], dict[str, str]]:
+    ids = data[BRANCH_ID].astype(str).tolist()
+    names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].astype(str).to_dict()
+    return ids, names
 
 
-def _network_rank_chart(frame: pd.DataFrame, *, improvement: bool) -> None:
-    title = "ده شعبه با بیشترین بهبود رتبه" if improvement else "ده شعبه با بیشترین افت رتبه"
-    prepared = prepare_network_rank_changes(frame, improvement=improvement)
-    if prepared.empty:
-        render_empty_state(f"شعبه‌ای برای «{title}» وجود ندارد.")
+def _branch_label(branch_id: str, names: dict[str, str]) -> str:
+    return f"{names.get(str(branch_id), 'شعبه')} — کد {branch_id}"
+
+
+def _focus_row(data: pd.DataFrame, outputs, branch_id: str) -> tuple[pd.Series, pd.Series]:
+    raw = data.loc[data[BRANCH_ID].astype(str).eq(str(branch_id))].iloc[0]
+    result = outputs.final_result.loc[outputs.final_result[BRANCH_ID].astype(str).eq(str(branch_id))].iloc[0]
+    return raw, result
+
+
+def _steps(mode: ScenarioType) -> tuple[str, ...]:
+    if mode is ScenarioType.FOCUS_BRANCH_ONLY:
+        return ("انتخاب شعبه", "انتخاب شاخص‌ها", "تعریف تغییرات", "بازبینی و اجرا")
+    if mode is ScenarioType.MULTI_BRANCH:
+        return ("انتخاب شعبه محوری", "تعریف قواعد عمومی", "تغییرات اختصاصی شعب", "بازبینی و اجرا")
+    return ("انتخاب شعبه و رتبه هدف", "انتخاب شاخص‌های قابل تغییر", "تنظیم محدوده بررسی", "محاسبه و پیشنهاد")
+
+
+def _wizard_header(draft: dict) -> None:
+    render_wizard_steps(_steps(draft["scenario_type"]), draft["current_step"])
+
+
+def _branch_summary(data, outputs, branch_id: str) -> None:
+    raw, result = _focus_row(data, outputs, branch_id)
+    with st.container(border=True):
+        st.subheader(str(raw[BRANCH_NAME]))
+        st.caption(f"کد شعبه: {raw[BRANCH_ID]} | منطقه: {raw[REGION]}")
+        columns = st.columns(3)
+        columns[0].metric("رتبه فعلی", format_rank(result["rank"]))
+        columns[1].metric("امتیاز فعلی", format_score(result["final_score"]))
+        columns[2].metric("درجه فعلی", format_grade(result["grade"]))
+
+
+def _select_focus(draft, data, outputs, user) -> None:
+    ids, names = _branch_maps(data)
+    if user.branch_id:
+        try:
+            focus = resolve_focus_branch(user, data)
+        except ValueError as exc:
+            st.error(str(exc)); return
+        set_focus_branch(draft, focus.branch_id, focus.source.value)
+        st.info(f"شعبه محوری بر اساس شعبه تخصیص‌یافته کاربر انتخاب شد: {_branch_label(focus.branch_id, names)}")
+    else:
+        current = draft.get("focus_branch_id")
+        index = ids.index(current) + 1 if current in ids else 0
+        chosen = st.selectbox("جست‌وجوی نام یا کد شعبه", [None, *ids], index=index,
+                              format_func=lambda item: "انتخاب شعبه" if item is None else _branch_label(item, names),
+                              key="sensitivity_focus_branch")
+        set_focus_branch(draft, chosen, FocusBranchSource.USER_SELECTED_BRANCH.value if chosen else None)
+    if draft.get("focus_branch_id"):
+        _branch_summary(data, outputs, draft["focus_branch_id"])
+        if draft["scenario_type"] is ScenarioType.TARGET_RANK:
+            _, result = _focus_row(data, outputs, draft["focus_branch_id"])
+            baseline_rank = int(result["rank"])
+            target = st.number_input("رتبه هدف", min_value=1, max_value=len(data),
+                                     value=int(draft["target_rank_request"].get("target_rank", max(1, baseline_rank - 1))), step=1)
+            draft["target_rank_request"]["target_rank"] = int(target)
+            if target >= baseline_rank:
+                st.info("شعبه هم‌اکنون رتبه درخواستی را دارد یا از آن بهتر است؛ تغییری لازم نیست.")
+
+
+def _indicator_picker(draft, data, outputs) -> None:
+    branch_id = draft["focus_branch_id"]
+    raw, _ = _focus_row(data, outputs, branch_id)
+    selected = list(draft.get("selected_indicator_ids", []))
+    st.caption("یک یا چند شاخص را انتخاب کنید. هر شاخص فقط یک‌بار قابل انتخاب است.")
+    for row_start in range(0, len(INDICATOR_REGISTRY), 4):
+        for column, indicator_id in zip(st.columns(4), list(INDICATOR_REGISTRY)[row_start:row_start + 4]):
+            definition = INDICATOR_REGISTRY[indicator_id]
+            with column, st.container(border=True):
+                checked = st.checkbox(definition.display_name, value=indicator_id in selected,
+                                      key=f"select_{draft['scenario_type'].value}_{branch_id}_{indicator_id}")
+                st.caption(f"مقدار پایه: {format_raw_value(raw[indicator_id])}")
+                st.caption(f"وزن رسمی: {format_percentage(WEIGHTS[indicator_id] * 100, 0)}")
+                if draft["scenario_type"] is ScenarioType.TARGET_RANK:
+                    st.caption(f"نوع: {INDICATOR_TYPE_LABELS.get(INDICATOR_TYPES[indicator_id], 'شاخص مدل')}")
+                if checked and indicator_id not in selected: selected.append(indicator_id)
+                if not checked and indicator_id in selected: selected.remove(indicator_id)
+    try:
+        set_selected_indicators(draft, list(unique_indicator_ids(selected)))
+    except ValueError as exc:
+        st.error(str(exc))
+
+
+def _focus_changes(draft, data) -> None:
+    raw = data.loc[data[BRANCH_ID].astype(str).eq(str(draft["focus_branch_id"]))].iloc[0]
+    for indicator_id in draft["selected_indicator_ids"]:
+        definition = INDICATOR_REGISTRY[indicator_id]
+        saved = draft["focus_changes"].get(indicator_id, {})
+        with st.container(border=True):
+            st.subheader(definition.display_name)
+            columns = st.columns([1.3, 1, 1.4])
+            operation = columns[0].selectbox("نوع تغییر", OPERATIONS,
+                index=OPERATIONS.index(RuleOperation(saved.get("operation", RuleOperation.PERCENT_CHANGE.value))),
+                format_func=OPERATION_LABELS.get, key=f"focus_op_{indicator_id}")
+            value = columns[1].number_input("مقدار", value=float(saved.get("value", 0.0)), key=f"focus_value_{indicator_id}")
+            try:
+                preview = preview_raw_operation(raw[indicator_id], operation, value, indicator_id)
+            except ValueError as exc:
+                columns[2].error(str(exc)); draft["focus_changes"].pop(indicator_id, None)
+            else:
+                columns[2].metric("مقدار پایه ← مقدار پیش‌نمایش", f"{format_raw_value(raw[indicator_id])} ← {format_raw_value(preview)}")
+                draft["focus_changes"][indicator_id] = {"operation": operation.value, "value": float(value), "preview": preview}
+            if indicator_id == PROFIT_LOSS_KEY and float(raw[indicator_id]) < 0 and operation is RuleOperation.PERCENT_CHANGE:
+                st.info("افزایش درصدی مقدار منفی را به سمت صفر و وضعیت بهتر حرکت می‌دهد.")
+
+
+def _add_bulk_rule(draft, data) -> None:
+    ids, names = _branch_maps(data); regions = sorted(data[REGION].astype(str).unique())
+    with st.form("bulk_rule_form", clear_on_submit=False):
+        columns = st.columns(4)
+        scope = columns[0].selectbox("دامنه", SCOPES, format_func=SCOPE_LABELS.get)
+        indicator = columns[1].selectbox("شاخص", list(INDICATOR_REGISTRY), format_func=lambda key: INDICATOR_REGISTRY[key].display_name)
+        operation = columns[2].selectbox("نوع تغییر", OPERATIONS, format_func=OPERATION_LABELS.get)
+        value = columns[3].number_input("مقدار", value=0.0)
+        selected_ids = st.multiselect("شعب منتخب", ids, format_func=lambda item: _branch_label(item, names), disabled=scope is not SelectionScope.SELECTED_BRANCHES)
+        selected_regions = st.multiselect("مناطق منتخب", regions, disabled=scope is not SelectionScope.SELECTED_REGIONS)
+        submitted = st.form_submit_button("افزودن قاعده عمومی", type="primary")
+    if submitted:
+        if scope is SelectionScope.SELECTED_BRANCHES and not selected_ids: st.error("حداقل یک شعبه را انتخاب کنید.")
+        elif scope is SelectionScope.SELECTED_REGIONS and not selected_regions: st.error("حداقل یک منطقه را انتخاب کنید.")
+        else:
+            draft["bulk_rules"].append({"target_scope": scope.value, "indicator_id": indicator, "operation": operation.value,
+                                         "value": float(value), "selected_branch_ids": list(selected_ids), "selected_regions": list(selected_regions)})
+    for index, rule in enumerate(list(draft["bulk_rules"])):
+        scope = SelectionScope(rule["target_scope"])
+        try:
+            targets = SelectionResolver.resolve(scope, data, load_current_user(ROOT / "config/local_user.json"),
+                selected_branch_ids=rule.get("selected_branch_ids"), selected_regions=rule.get("selected_regions"))
+        except ValueError: targets = []
+        with st.container(border=True):
+            st.write(f"{SCOPE_LABELS[scope]} | {INDICATOR_REGISTRY[rule['indicator_id']].display_name} | {OPERATION_LABELS[RuleOperation(rule['operation'])]}: {rule['value']:,}")
+            st.caption(f"منبع مقدار: قاعده عمومی | تعداد شعب هدف: {len(targets)}")
+            if st.button("حذف", key=f"delete_bulk_{index}"):
+                delete_bulk_rule(draft, index); st.rerun()
+
+
+def _add_override(draft, data) -> None:
+    ids, names = _branch_maps(data)
+    st.info("تغییر اختصاصی شعبه بر قاعده عمومی همان شعبه و شاخص اولویت دارد.")
+    edit_index = draft.get("override_edit_index")
+    editing = draft["manual_overrides"][edit_index] if isinstance(edit_index, int) and edit_index < len(draft["manual_overrides"]) else None
+    with st.form("override_form"):
+        columns = st.columns(4)
+        branch = columns[0].selectbox("شعبه", ids, index=ids.index(editing["branch_id"]) if editing else 0, format_func=lambda item: _branch_label(item, names))
+        indicator_ids = list(INDICATOR_REGISTRY)
+        indicator = columns[1].selectbox("شاخص", indicator_ids, index=indicator_ids.index(editing["indicator_id"]) if editing else 0, format_func=lambda key: INDICATOR_REGISTRY[key].display_name)
+        operation = columns[2].selectbox("نوع تغییر", OPERATIONS, index=OPERATIONS.index(RuleOperation(editing["operation"])) if editing else 0, format_func=OPERATION_LABELS.get)
+        value = columns[3].number_input("مقدار", value=float(editing["value"]) if editing else 0.0)
+        submitted = st.form_submit_button("ثبت ویرایش" if editing else "افزودن تغییر اختصاصی", type="primary")
+    if submitted:
+        key = (branch, indicator)
+        occupied = {(row["branch_id"], row["indicator_id"]) for i, row in enumerate(draft["manual_overrides"]) if i != edit_index}
+        if key in occupied:
+            st.error("برای این شعبه و شاخص قبلاً تغییر اختصاصی ثبت شده است.")
+        else:
+            row = {"branch_id": branch, "indicator_id": indicator, "operation": operation.value, "value": float(value)}
+            if editing: draft["manual_overrides"][edit_index] = row; draft.pop("override_edit_index", None)
+            else: draft["manual_overrides"].append(row)
+    for index, row in enumerate(list(draft["manual_overrides"])):
+        with st.container(border=True):
+            st.write(f"{_branch_label(row['branch_id'], names)} | {INDICATOR_REGISTRY[row['indicator_id']].display_name} | {OPERATION_LABELS[RuleOperation(row['operation'])]}: {row['value']:,}")
+            st.caption("منبع مقدار: تغییر اختصاصی؛ با بازنشانی، مقدار از قاعده عمومی یا داده مبنا به ارث می‌رسد.")
+            actions = st.columns(2)
+            if actions[0].button("ویرایش", key=f"edit_override_{index}"):
+                draft["override_edit_index"] = index; st.rerun()
+            if actions[1].button("بازنشانی به قاعده عمومی یا مبنا", key=f"delete_override_{index}"):
+                delete_manual_override(draft, index); draft.pop("override_edit_index", None); st.rerun()
+
+
+def _review(draft, data) -> None:
+    ids, names = _branch_maps(data); focus = draft["focus_branch_id"]
+    st.subheader("بازبینی سناریو")
+    st.write(f"شعبه محوری: {_branch_label(focus, names)}")
+    if draft["scenario_type"] is ScenarioType.FOCUS_BRANCH_ONLY:
+        rows = [{"شاخص": INDICATOR_REGISTRY[key].display_name, "مقدار پایه": format_raw_value(data.loc[data[BRANCH_ID].astype(str).eq(focus), key].iloc[0]),
+                 "عملیات": OPERATION_LABELS[RuleOperation(value["operation"])], "مقدار واردشده": value["value"], "مقدار پیش‌نمایش": format_raw_value(value["preview"])}
+                for key, value in draft["focus_changes"].items()]
+        st.dataframe(rows, width="stretch", hide_index=True)
+        st.info("مقادیر خام همه شعب دیگر بدون تغییر باقی می‌ماند.")
+    else:
+        targeted: set[str] = set()
+        user = load_current_user(ROOT / "config/local_user.json")
+        for rule in draft["bulk_rules"]:
+            try:
+                targeted.update(SelectionResolver.resolve(SelectionScope(rule["target_scope"]), data, user,
+                    selected_branch_ids=rule.get("selected_branch_ids"), selected_regions=rule.get("selected_regions")))
+            except ValueError:
+                pass
+        targeted.update(str(row["branch_id"]) for row in draft["manual_overrides"])
+        metrics = st.columns(4); metrics[0].metric("تعداد قواعد عمومی", len(draft["bulk_rules"])); metrics[1].metric("تعداد تغییرات اختصاصی", len(draft["manual_overrides"])); metrics[2].metric("تعداد شعب هدف", len(targeted)); metrics[3].metric("شعبه محوری", names.get(focus, focus))
+        render_process_timeline(("داده پایه", "قواعد عمومی", "تغییرات اختصاصی", "اجرای مدل رسمی"))
+
+
+def _execute(draft, data) -> None:
+    try:
+        request = build_focus_request(draft) if draft["scenario_type"] is ScenarioType.FOCUS_BRANCH_ONLY else build_multi_request(draft)
+        with st.spinner("در حال اجرای مدل رسمی درجه‌بندی..."):
+            result = ScenarioExecutionService().execute(request, data)
+    except ScenarioRequestValidationError as exc:
+        st.error(service_error_message(str(exc)))
+    except (ValueError, KeyError) as exc:
+        st.error(str(exc))
+    except Exception:
+        LOGGER.exception("Unexpected sensitivity scenario execution failure")
+        st.error("اجرای سناریو با خطای پیش‌بینی‌نشده روبه‌رو شد. لطفاً دوباره تلاش کنید.")
+    else:
+        draft["execution_result"] = result; draft["show_result"] = True
+        st.session_state[SESSION_HISTORY_KEY].append({"نام سناریو": request.scenario_name, "نوع": SCENARIO_TYPE_LABELS[request.scenario_type], "شعبه محوری": request.focus_branch_id})
+        st.rerun()
+
+
+def _comparison_table(result: ScenarioExecutionResult) -> pd.DataFrame:
+    rows = []
+    for item in result.focus_branch_comparison.indicator_comparisons:
+        rows.append({"شاخص": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
+            "مقدار پایه": item["baseline_raw_value"], "مقدار سناریو": item["scenario_raw_value"], "تغییر مقدار خام": item["raw_value_change"],
+            "امتیاز مدل پایه": item["baseline_score"], "امتیاز مدل سناریو": item["scenario_score"], "تغییر سهم وزنی": item["weighted_score_change"]})
+    return pd.DataFrame(rows)
+
+
+def _branch_section(title: str, items, data) -> None:
+    st.subheader(title)
+    names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
+    st.caption(f"تعداد کل: {len(items):,}")
+    if not items: render_empty_state("موردی در این بخش وجود ندارد."); return
+    st.dataframe([{"شعبه": names.get(item.branch_id, item.branch_id), "کد": item.branch_id, "رتبه پایه": item.baseline_rank,
+                   "رتبه سناریو": item.scenario_rank, "تغییر رتبه": item.rank_change, "امتیاز پایه": item.baseline_final_score,
+                   "امتیاز سناریو": item.scenario_final_score, "درجه پایه": format_grade(item.baseline_grade), "درجه سناریو": format_grade(item.scenario_grade)} for item in items], width="stretch", height=360, hide_index=True)
+
+
+def _result_page(draft, data) -> None:
+    result = draft["execution_result"]
+    names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
+    options = result_branch_options(result)
+    current = str(draft.get("selected_result_branch_id") or result.request.focus_branch_id)
+    if current not in options: current = options[0]
+    selected = st.selectbox("مشاهده نتایج شعبه", options, index=options.index(current),
+                            format_func=lambda item: _branch_label(item, names), key="official_result_branch")
+    draft["selected_result_branch_id"] = selected
+    comparison = select_official_branch_result(result, selected)
+    render_process_timeline(("داده‌های پایه", "اعمال تغییرات", "اجرای مدل رسمی", "تکمیل"))
+    change_text, _ = rank_change_presentation(comparison.rank_change)
+    cards = st.columns(4)
+    cards[0].metric("رتبه", comparison.scenario_rank, change_text)
+    cards[1].metric("امتیاز نهایی", format_score(comparison.scenario_final_score), f"{comparison.score_change:+.1f}")
+    cards[2].metric("درجه", format_grade(comparison.scenario_grade))
+    cards[3].metric("تعداد شعب دارای تغییر واقعی", len(result.modified_branches))
+    st.subheader("مقایسه شاخص‌های شعبه انتخاب‌شده")
+    if comparison.indicator_comparisons:
+        rows = [{"شاخص": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
+                 "مقدار پایه": item["baseline_raw_value"], "مقدار سناریو": item["scenario_raw_value"],
+                 "تغییر مقدار خام": item["raw_value_change"], "امتیاز مدل پایه": item["baseline_score"],
+                 "امتیاز مدل سناریو": item["scenario_score"], "تغییر سهم وزنی": item["weighted_score_change"]}
+                for item in comparison.indicator_comparisons]
+        st.dataframe(rows, width="stretch", height=360, hide_index=True)
+    else:
+        st.info("جزئیات شاخص‌های این شعبه در قرارداد نتیجه فعلی موجود نیست؛ مقایسه رتبه، امتیاز و درجه نمایش داده شد.")
+    _branch_section("شعب دارای تغییر در شاخص‌ها", result.modified_branches, data)
+    _branch_section("شعب دارای تغییر در رتبه، امتیاز یا درجه", result.rank_affected_branches, data)
+    actions = st.columns(4)
+    if actions[0].button("بازگشت و ویرایش", width="stretch"): return_to_edit(draft); st.rerun()
+    if actions[1].button("ایجاد نسخه کپی", width="stretch"): copy_sensitivity_draft(st.session_state); st.rerun()
+    if actions[2].button("سناریوی جدید", width="stretch"): reset_sensitivity_draft(st.session_state); st.switch_page("app.py")
+    if actions[3].button("ذخیره نتیجه", width="stretch"): _save_execution(draft)
+
+
+def _persisted_result_page(draft, data) -> None:
+    results = list(draft.get("persisted_result_summaries") or [])
+    if not results:
+        render_empty_state("خلاصه نتیجه ذخیره‌شده‌ای برای این سناریو موجود نیست.")
         return
-    if len(prepared) == 1:
-        row = prepared.iloc[0]
-        movement = (
-            f"+{row['magnitude']} رتبه"
-            if improvement
-            else f"افت {row['magnitude']} رتبه"
-        )
-        render_kpi_group(
-            "تنها شعبه دارای تغییر",
-            (
-                ("شعبه", row["branch_label"], None, "off"),
-                ("تغییر", movement, movement, "normal" if improvement else "inverse"),
-            ),
-        )
-    figure = build_network_rank_chart(frame, improvement=improvement)
-    if figure is not None:
-        render_chart(
-            figure,
-            key=f"network_rank_{'improvement' if improvement else 'decline'}",
-        )
+    names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
+    focus = str(draft.get("focus_branch_id") or "")
+    ids = list(dict.fromkeys([focus, *(str(item.branch_id) for item in results)]))
+    ids = [item for item in ids if item and any(str(row.branch_id) == item for row in results)]
+    selected = st.selectbox("مشاهده نتایج شعبه", ids, format_func=lambda item: _branch_label(item, names), key="persisted_result_branch")
+    item = next(row for row in results if str(row.branch_id) == selected)
+    cards = st.columns(3)
+    cards[0].metric("رتبه", item.scenario_rank, rank_change_presentation(item.rank_change)[0])
+    cards[1].metric("امتیاز نهایی", format_score(item.scenario_score), f"{item.score_change:+.1f}")
+    cards[2].metric("درجه", format_grade(item.scenario_grade))
+    st.info("جزئیات شاخص‌های هر شعبه در خلاصه نتیجه ذخیره‌شده موجود نیست؛ مقایسه رسمی رتبه، امتیاز و درجه نمایش داده شد.")
+    if st.button("بازگشت و ویرایش"):
+        draft["show_result"] = False; draft["persisted_result_summaries"] = []; st.rerun()
 
 
-def render_network_impact(comparison) -> None:
-    """Render network KPIs, filterable table, download, and movement charts."""
-    network = comparison.network_impact
-    summary = comparison.summary
-    unchanged = len(network) - int(summary["branches_with_rank_change"])
-    cards = (
-        ("تعداد شعب دارای تغییر رتبه", summary["branches_with_rank_change"]),
-        ("تعداد شعب دارای تغییر امتیاز", summary["branches_with_score_change"]),
-        ("تعداد شعب دارای تغییر درجه", summary["branches_with_grade_change"]),
-        ("بیشترین بهبود رتبه", summary["largest_rank_improvement"]),
-        ("بیشترین افت رتبه", summary["largest_rank_decline"]),
-        ("تعداد شعب بدون تغییر رتبه", unchanged),
-    )
-    summary_tab, table_tab, improvement_tab, decline_tab = st.tabs(
-        ["خلاصه", "جدول کامل", "بیشترین بهبود", "بیشترین افت"]
-    )
-    with summary_tab:
-        for start in range(0, len(cards), 3):
-            columns = st.columns(3)
-            for column, (label, value) in zip(columns, cards[start : start + 3]):
-                with column:
-                    render_kpi_card(label, format_number(value))
-    with table_tab:
-        selected_filter = st.selectbox(
-            "فیلتر جدول اثر شبکه", NETWORK_FILTERS, key="_network_filter"
-        )
-        filtered = filter_network_impact(network, selected_filter)
-        important, details = _network_display_tables(filtered)
-        render_table(
-            important,
-            height=430,
-            column_config={
-                "کد شعبه": st.column_config.TextColumn(width="small"),
-                "نام شعبه": st.column_config.TextColumn(width="medium"),
-                "منطقه": st.column_config.TextColumn(width="medium"),
-                "رتبه مبنا": st.column_config.NumberColumn(format="%d", width="small"),
-                "رتبه سناریو": st.column_config.NumberColumn(format="%d", width="small"),
-                "تغییر رتبه": st.column_config.NumberColumn(format="%d", width="small"),
-                "درجه مبنا": st.column_config.TextColumn(width="small"),
-                "درجه سناریو": st.column_config.TextColumn(width="small"),
-            },
-        )
-        with st.expander("جزئیات بیشتر"):
-            render_table(details, height=350)
-        csv_table = pd.concat(
-            [important.reset_index(drop=True), details.drop(columns=["کد شعبه", "نام شعبه"]).reset_index(drop=True)],
-            axis=1,
-        )
-        st.download_button(
-            "دانلود CSV",
-            data=csv_table.to_csv(index=False).encode("utf-8-sig"),
-            file_name="scenario_network_impact.csv",
-            mime="text/csv",
-        )
-    with improvement_tab:
-        _network_rank_chart(network, improvement=True)
-    with decline_tab:
-        _network_rank_chart(network, improvement=False)
+def _target_settings(draft) -> None:
+    settings = draft["target_rank_request"]
+    settings["max_growth_percent"] = st.number_input("حداکثر رشد قابل بررسی", min_value=0.01, value=float(settings.get("max_growth_percent", 100.0)), step=5.0)
+    with st.expander("تنظیمات پیشرفته"):
+        settings["minimum_growth_percent"] = st.number_input("حداقل رشد قابل بررسی", min_value=0.0, value=float(settings.get("minimum_growth_percent", 0.0)))
+        settings["tolerance_percent"] = st.number_input("حد پذیرش محاسبه", min_value=0.0001, value=float(settings.get("tolerance_percent", 0.01)), format="%.4f")
+        settings["search_precision_percent"] = st.number_input("دقت پیشنهاد", min_value=0.0001, value=float(settings.get("search_precision_percent", 0.01)), format="%.4f")
+        settings["max_iterations"] = st.number_input("حداکثر مراحل بررسی", min_value=1, value=int(settings.get("max_iterations", 40)), step=1)
+
+
+def _solve_target(draft, data) -> None:
+    try:
+        request = build_target_request(draft)
+        with st.spinner("در حال محاسبه تغییرات متوازن موردنیاز..."):
+            solution = ScenarioExecutionService().solve_target_rank(request, data)
+    except (ValueError, KeyError) as exc:
+        st.error(service_error_message(str(exc))); return
+    except Exception:
+        LOGGER.exception("Unexpected target-rank execution failure")
+        st.error("محاسبه رتبه هدف با خطای پیش‌بینی‌نشده روبه‌رو شد. لطفاً دوباره تلاش کنید."); return
+    draft["target_solution"] = solution
+    st.session_state[SESSION_HISTORY_KEY].append({"نام سناریو": draft.get("scenario_name") or "تحلیل رتبه هدف", "نوع": SCENARIO_TYPE_LABELS[ScenarioType.TARGET_RANK], "شعبه محوری": request.focus_branch_id})
+    st.rerun()
+
+
+def _target_result(draft, data) -> None:
+    solution = draft["target_solution"]
+    status = TARGET_STATUS_LABELS[solution.status]
+    (st.success if solution.target_reached else st.warning)(status)
+    cards = st.columns(4)
+    cards[0].metric("رتبه پایه", solution.baseline_rank or "—")
+    cards[1].metric("رتبه هدف", solution.target_rank)
+    cards[2].metric("رتبه حاصل‌شده", solution.achieved_rank or "—")
+    cards[3].metric("رشد مشترک موردنیاز", format_percentage(solution.required_common_growth_percent))
+    if solution.status is TargetRankStatus.MAX_ITERATIONS_REACHED:
+        st.info("ممکن است یک پیشنهاد موفق پیدا شده باشد، اما کمترین رشد موردنیاز در محدوده تنظیمات با قطعیت تعیین نشده است.")
+        st.write(f"تعیین قطعی حداقل رشد: {'بله' if solution.minimum_growth_established else 'خیر'}")
+    if solution.status is TargetRankStatus.TARGET_NOT_REACHABLE:
+        st.info(f"حداکثر رشد بررسی‌شده: {format_percentage(solution.required_common_growth_percent)}. سقف رشد یا شاخص‌های منتخب را بازبینی کنید.")
+    if solution.indicator_proposals:
+        rows = []
+        for proposal in solution.indicator_proposals:
+            shown = count_proposal_presentation(proposal)
+            rows.append({"شاخص": INDICATOR_REGISTRY[proposal.indicator_id].display_name, "مقدار پایه": proposal.baseline_raw_value,
+                         "پیشنهاد قابل اجرا": shown["applicable_value"], "تغییر مطلق": proposal.absolute_change, "درصد تغییر": proposal.percent_change})
+            if shown["show_ceiling_note"]: st.caption(f"{INDICATOR_REGISTRY[proposal.indicator_id].display_name}: پیشنهاد شمارشی با گرد کردن رو به بالا به عدد صحیح و اجرای دوباره مدل رسمی تأیید شده است.")
+            if proposal.indicator_id == PROFIT_LOSS_KEY and proposal.baseline_raw_value == 0:
+                st.info("مقدار صفر سود و زیان به دلیل نداشتن مبنای غیرصفر، با تغییر درصدی تغییر نکرد.")
+        st.caption(f"تعداد کل پیشنهادها: {len(rows):,}")
+        st.dataframe(rows, width="stretch", height=320, hide_index=True)
+        priorities, tied = action_priority(solution.indicator_proposals)
+        if priorities:
+            st.subheader("اولویت اقدامات")
+            st.caption("اولویت بر اساس سهم واقعی هر شاخص در افزایش امتیاز این سناریو")
+            st.dataframe([{"شاخص": INDICATOR_REGISTRY[row["indicator_id"]].display_name, "افزایش سهم وزنی": row["weighted_contribution_delta"]} for row in priorities], width="stretch", height=280, hide_index=True)
+            if tied: st.info("در این سناریو تفاوت معناداری میان اولویت شاخص‌ها دیده نمی‌شود.")
+        else:
+            st.info("در این سناریو افزایش مثبت و قابل تفکیکی در سهم وزنی شاخص‌ها دیده نمی‌شود.")
+    if solution.scenario_outputs is not None and solution.baseline_outputs is not None:
+        if st.button("ذخیره نتیجه رسمی", key="save_target_execution"):
+            _save_execution(draft)
+        if st.button("اعمال پیشنهاد و مشاهده نتایج کامل", type="primary"):
+            draft["show_result"] = True; st.rerun()
+        if draft.get("show_result"):
+            _target_full_result(solution)
+
+
+def _target_full_result(solution) -> None:
+    st.subheader("نتیجه کامل اجرای رسمی")
+    frame = target_solution_comparison(solution).copy()
+    focus = frame.loc[frame[BRANCH_ID].astype(str).eq(str(solution.focus_branch_id))].iloc[0]
+    movement, _ = rank_change_presentation(int(focus["rank_change"]))
+    cards = st.columns(4)
+    cards[0].metric("رتبه", int(focus["scenario_rank"]), movement)
+    cards[1].metric("امتیاز نهایی", format_score(focus["scenario_score"]), f"{float(focus['score_change']):+.1f}")
+    cards[2].metric("درجه", format_grade(focus["scenario_grade"]))
+    cards[3].metric("تعداد شعب دارای تغییر واقعی", 1 if solution.indicator_proposals else 0)
+    st.subheader("مقایسه شاخص‌های شعبه محوری")
+    st.dataframe([{"شاخص": INDICATOR_REGISTRY[item.indicator_id].display_name, "مقدار پایه": item.baseline_raw_value,
+                   "مقدار سناریو": item.proposed_raw_value, "تغییر مقدار خام": item.absolute_change,
+                   "امتیاز مدل پایه": item.baseline_normalized_score, "امتیاز مدل سناریو": item.scenario_normalized_score,
+                   "تغییر سهم وزنی": (item.scenario_weighted_contribution or 0) - (item.baseline_weighted_contribution or 0)}
+                  for item in solution.indicator_proposals], width="stretch", hide_index=True)
+    modified = frame.loc[frame[BRANCH_ID].astype(str).eq(str(solution.focus_branch_id))] if solution.indicator_proposals else frame.iloc[0:0]
+    affected = frame.loc[frame["rank_change"].ne(0) | frame["score_change"].ne(0) | frame["grade_changed"]]
+    def display(source):
+        return pd.DataFrame({"نام شعبه": source[BRANCH_NAME], "کد شعبه": source[BRANCH_ID], "رتبه پایه": source["baseline_rank"],
+            "رتبه سناریو": source["scenario_rank"], "تغییر رتبه": source["rank_change"], "امتیاز پایه": source["baseline_score"],
+            "امتیاز سناریو": source["scenario_score"], "درجه پایه": source["baseline_grade"].map(format_grade),
+            "درجه سناریو": source["scenario_grade"].map(format_grade)})
+    st.subheader("شعب دارای تغییر در شاخص‌ها")
+    st.caption(f"تعداد کل: {len(modified):,}")
+    st.dataframe(display(modified), width="stretch", height=320, hide_index=True)
+    st.subheader("شعب دارای تغییر در رتبه، امتیاز یا درجه")
+    st.caption(f"تعداد کل: {len(affected):,}")
+    st.dataframe(display(affected), width="stretch", height=360, hide_index=True)
+
+
+def _navigation(draft) -> None:
+    columns = st.columns([1, 1, 3, 1])
+    if columns[0].button("مرحله قبل", disabled=draft["current_step"] <= 1): draft["current_step"] -= 1; st.rerun()
+    if columns[1].button("مرحله بعد", disabled=draft["current_step"] >= 4): draft["current_step"] += 1; st.rerun()
+    if columns[3].button("پاک‌کردن سناریو"): reset_sensitivity_draft(st.session_state); st.rerun()
 
 
 def main() -> None:
-    initialize_session_state()
-    apply_global_styles()
-    render_page_header(
-        "ساخت و اجرای سناریوی تحلیل حساسیت",
-        "تغییر شاخص‌های شعب و بررسی اثر آن بر امتیاز، رتبه و درجه",
+    initialize_session_state(); apply_global_styles()
+    draft = st.session_state[SENSITIVITY_DRAFT_KEY]
+    if draft.get("scenario_type") is None:
+        render_page_header("فضای تحلیل حساسیت", "برای شروع، نوع سناریو را انتخاب کنید.")
+        for column, mode in zip(st.columns(3), ScenarioType):
+            if column.button(SCENARIO_TYPE_LABELS[mode], key=f"choose_{mode.value}", width="stretch"):
+                switch_scenario_mode(st.session_state, mode); st.rerun()
+        return
+    try: data, outputs = load_baseline()
+    except (FileNotFoundError, ValueError, OSError): st.error("اطلاعات مبنا بارگذاری نشد."); return
+    try: user = load_current_user(ROOT / "config/local_user.json")
+    except (FileNotFoundError, ValueError, OSError): st.error("اطلاعات کاربر در دسترس نیست."); return
+    mode = draft["scenario_type"]
+    render_page_header(SCENARIO_TYPE_LABELS[mode], "تعریف سناریو و اجرای آن با مدل رسمی درجه‌بندی")
+    for warning in st.session_state.pop("sensitivity_restore_warnings", []):
+        st.warning(warning)
+    name = st.text_input("نام سناریو", value=str(draft.get("scenario_name") or ""), key="sensitivity_scenario_name")
+    draft["scenario_name"] = name
+    persistence = dict(draft.get("persistence") or {})
+    dirty = workspace_service().has_unsaved_changes(draft)
+    status_text = "دارای تغییرات ذخیره‌نشده" if dirty else (
+        "پیش‌نویس ذخیره‌شده" if persistence.get("status") == "draft" else
+        "نتیجه ذخیره‌شده" if persistence.get("status") == "executed" else "ذخیره‌نشده"
     )
-    try:
-        baseline_df, baseline_outputs = load_baseline_data(DATA_FILE)
-    except (FileNotFoundError, ValueError, OSError):
-        st.error("اطلاعات مبنا بارگذاری نشد. لطفاً فایل داده و ساختار ستون‌ها را بررسی کنید.")
-        st.stop()
-    st.session_state["baseline_outputs"] = baseline_outputs
-    try:
-        persistence_service = get_scenario_service(ROOT)
-    except (FileNotFoundError, ValueError, OSError):
-        st.error("سرویس ذخیره‌سازی سناریو در دسترس نیست. تنظیمات کاربر محلی را بررسی کنید.")
-        st.stop()
-
-    definition_tab, results_tab, network_tab = st.tabs(
-        ["تعریف سناریو", "نتایج شعب منتخب", "اثر بر شبکه"]
-    )
-    with definition_tab:
-        scenario_name, user_branch_id, other_ids, selected_ids = _settings(
-            baseline_df, persistence_service
-        )
-        render_persistence_status(persistence_service)
-        if user_branch_id is None:
-            st.info("برای شروع، حداقل یک شعبه را انتخاب کنید.")
+    status_columns = st.columns([3, 1])
+    status_columns[0].caption(f"وضعیت ذخیره‌سازی: {status_text}")
+    if status_columns[1].button("ذخیره پیش‌نویس", width="stretch"):
+        _save_draft(draft)
+    if st.session_state.get("sensitivity_persistence_conflict"):
+        conflict_actions = st.columns(2)
+        if conflict_actions[0].button("بارگذاری آخرین نسخه", width="stretch"):
+            _reload_saved(draft, data)
+        if conflict_actions[1].button("ذخیره به‌عنوان نسخه جدید", width="stretch"):
+            _save_draft(draft, save_as_new=True)
+    if draft.get("show_result") and draft.get("persisted_result_summaries"):
+        _persisted_result_page(draft, data); return
+    if draft.get("show_result") and draft.get("execution_result") is not None:
+        _result_page(draft, data); return
+    if mode is ScenarioType.TARGET_RANK and draft.get("target_solution") is not None:
+        _target_result(draft, data)
+        if st.button("بازگشت و ویرایش تحلیل"): return_to_edit(draft); st.rerun()
+        return
+    _wizard_header(draft)
+    step = draft["current_step"]
+    if step == 1: _select_focus(draft, data, outputs, user)
+    elif not draft.get("focus_branch_id"): st.warning("ابتدا شعبه محوری را انتخاب کنید.")
+    elif mode is ScenarioType.FOCUS_BRANCH_ONLY:
+        if step == 2: _indicator_picker(draft, data, outputs)
+        elif step == 3: _focus_changes(draft, data)
         else:
-            render_baseline_summary(baseline_outputs.final_result, selected_ids)
-            if st.session_state["scenario_mode"] == "ONLY_USER_BRANCH":
-                preview, definition = _render_user_only_preview(
-                    baseline_df, user_branch_id
-                )
-            elif not other_ids:
-                st.warning("حداقل یک شعبه دیگر برای دامنه تغییر انتخاب کنید.")
-                preview, definition = _render_user_only_preview(
-                    baseline_df, user_branch_id
-                )
-            else:
-                preview, definition = _render_rule_preview(
-                    baseline_df, user_branch_id, other_ids, persistence_service
-                )
-            actions = st.columns([1, 1, 3])
-            with actions[0]:
-                submitted = st.button(
-                    "اجرای سناریو",
-                    type="primary",
-                    disabled=(
-                        not preview.is_valid
-                        or (
-                            st.session_state["scenario_mode"] == "USER_AND_OTHERS"
-                            and not other_ids
-                        )
-                    ),
-                    width="content",
-                )
-            with actions[1]:
-                save_draft = st.button("ذخیره پیش‌نویس", width="content")
-            if save_draft:
-                try:
-                    _save_draft(
-                        persistence_service,
-                        preview.changes,
-                        definition,
-                        scenario_name,
-                        selected_ids,
-                    )
-                except Exception as exc:
-                    _show_persistence_error(exc)
-                else:
-                    st.success("پیش‌نویس سناریو ذخیره شد.")
-            if submitted:
-                if save_draft:
-                    st.info("پیش‌نویس ذخیره شد؛ برای اجرا دوباره دکمه اجرا را بزنید.")
-                try:
-                    execution = execute_generated_changes(
-                        baseline_df, baseline_outputs, preview.changes, scenario_name, selected_ids
-                    )
-                except ValueError as exc:
-                    st.error(str(exc))
-                else:
-                    st.session_state.update(
-                        {
-                            "scenario_name": scenario_name.strip(),
-                            "selected_regions": st.session_state["selected_regions"],
-                            "selected_branch_ids": list(selected_ids),
-                            "scenario_definition": definition,
-                            "scenario_changes": execution.changes,
-                            "scenario_dataframe": execution.scenario_dataframe,
-                            "baseline_outputs": baseline_outputs,
-                            "scenario_outputs": execution.scenario_outputs,
-                            "scenario_results": execution.scenario_outputs,
-                            "comparison_results": execution.comparison_results,
-                            "scenario_executed": True,
-                            "current_scenario_dirty": True,
-                            "loaded_scenario_changes": [],
-                            "loaded_scenario_edit_modes": {},
-                            "_selected_result_branch_id": user_branch_id,
-                        }
-                    )
-                    st.success("سناریو با موفقیت اجرا شد.")
-
-            if st.session_state["scenario_executed"]:
-                    st.markdown("#### ذخیره نتیجه")
-                    save_columns = st.columns([1, 1, 3])
-                    with save_columns[0]:
-                        save_result = st.button(
-                            "ذخیره نتیجه اجرا",
-                            key="_save_executed",
-                            width="content",
-                            disabled=False,
-                        )
-                    with save_columns[1]:
-                        save_new = st.button(
-                            "ذخیره به‌عنوان نسخه جدید",
-                            key="_save_new_version",
-                            width="content",
-                        )
-                    if save_result or save_new:
-                        try:
-                            saved = _save_executed(
-                                persistence_service,
-                                save_as_new=save_new,
-                            )
-                        except Exception as exc:
-                            _show_persistence_error(exc)
-                        else:
-                            st.success(
-                                "نتیجه سناریو به‌عنوان نسخه جدید ذخیره شد."
-                                if save_new
-                                else "نتیجه اجرای سناریو ذخیره شد."
-                            )
-
-    with results_tab:
-        if st.session_state["scenario_executed"]:
-            render_selected_branch_results(
-                st.session_state["comparison_results"],
-                st.session_state["selected_branch_ids"],
-                persistence_service.current_user.branch_id,
-            )
+            _review(draft, data)
+            if st.button("اجرای سناریو", type="primary", width="stretch"): _execute(draft, data)
+    elif mode is ScenarioType.MULTI_BRANCH:
+        if step == 2: _add_bulk_rule(draft, data)
+        elif step == 3: _add_override(draft, data)
         else:
-            render_empty_state("پس از اجرای سناریو، نتایج شعب منتخب در این بخش نمایش داده می‌شود.")
-
-    with network_tab:
-        if st.session_state["scenario_executed"]:
-            render_network_impact(st.session_state["comparison_results"])
+            _review(draft, data)
+            if st.button("اجرای سناریو", type="primary", width="stretch"): _execute(draft, data)
+    else:
+        if step == 2: _indicator_picker(draft, data, outputs)
+        elif step == 3: _target_settings(draft)
         else:
-            render_empty_state("پس از اجرای سناریو، اثر آن بر کل شبکه در این بخش نمایش داده می‌شود.")
+            _review_target = draft["target_rank_request"]
+            st.write(f"رتبه هدف: {_review_target.get('target_rank', '—')}")
+            st.write(f"تعداد شاخص‌های قابل تغییر: {len(draft['selected_indicator_ids'])}")
+            st.write(f"حداکثر رشد قابل بررسی: {format_percentage(_review_target.get('max_growth_percent'))}")
+            if st.button("محاسبه و پیشنهاد", type="primary", width="stretch"): _solve_target(draft, data)
+    _navigation(draft)
 
 
 main()

@@ -49,6 +49,9 @@ def initialize_session_state(
         if key not in target:
             target[key] = default.copy() if isinstance(default, list) else default
     target.pop("selected_branches", None)
+    from ui.sensitivity_state import initialize_sensitivity_state
+
+    initialize_sensitivity_state(target)
     return target
 
 

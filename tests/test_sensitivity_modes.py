@@ -305,3 +305,18 @@ def test_invalid_mixed_mode_requests_fail_before_ranking(
     monkeypatch.setattr("services.scenario_execution_service.run_ranking_model", ranking_must_not_run)
     with pytest.raises(ScenarioRequestValidationError):
         ScenarioExecutionService().execute(scenario_request, input_df)
+
+
+def test_application_service_delegates_target_rank_to_official_solver(monkeypatch, input_df) -> None:
+    expected = object()
+    request = object()
+    captured = {}
+
+    def fake_solver(received_request, received_data):
+        captured.update(request=received_request, data=received_data)
+        return expected
+
+    monkeypatch.setattr("services.target_rank_solver.solve_target_rank", fake_solver)
+    actual = ScenarioExecutionService().solve_target_rank(request, input_df)
+    assert actual is expected
+    assert captured["request"] is request and captured["data"] is input_df
