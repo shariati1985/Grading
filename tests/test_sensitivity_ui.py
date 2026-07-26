@@ -72,6 +72,20 @@ def test_starting_new_focus_scenario_never_restores_old_branch_or_widgets() -> N
     assert not any(str(key).startswith("focus_value_") for key in state)
 
 
+def test_reset_scenario_clears_stale_focus_widget_state() -> None:
+    state = {
+        SENSITIVITY_DRAFT_KEY: new_scenario_draft(ScenarioType.FOCUS_BRANCH_ONLY),
+        "sensitivity_focus_branch": "103",
+        "focus_value_avg_deposits_PERCENT_CHANGE": "10",
+    }
+    state[SENSITIVITY_DRAFT_KEY].update(focus_branch_id="103", selected_indicator_ids=["avg_deposits"])
+    reset_sensitivity_draft(state)
+
+    assert state[SENSITIVITY_DRAFT_KEY]["focus_branch_id"] is None
+    assert "sensitivity_focus_branch" not in state
+    assert not any(str(key).startswith("focus_value_") for key in state)
+
+
 def test_focus_branch_change_clears_stale_branch_inputs() -> None:
     draft = new_scenario_draft(ScenarioType.FOCUS_BRANCH_ONLY)
     set_focus_branch(draft, "103", "USER_SELECTED_BRANCH")

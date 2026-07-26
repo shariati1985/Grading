@@ -11,8 +11,9 @@ from urllib.parse import quote
 import streamlit as st
 
 from domain.scenario_contracts import ScenarioType
+from services.user_context import load_current_user
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS
-from ui.sensitivity_state import SENSITIVITY_DRAFT_KEY, start_new_scenario
+from ui.sensitivity_state import start_new_scenario
 
 NAVIGATION_ITEMS = tuple(
     (item.icon, item.label, item.scenario_type) for item in SCENARIO_DEFINITIONS
@@ -25,6 +26,8 @@ UTILITY_NAVIGATION_ITEMS = (
     ("home", "صفحه اصلی", "/"),
     ("folder", "سناریوهای ذخیره‌شده", "/?view=saved#saved-scenarios"),
 )
+HOME_VIEW = "home"
+SAVED_SCENARIOS_VIEW = "saved"
 
 ICON_SVGS = {
     "home": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 10.5 8-6 8 6"/><path d="M6.5 9.5V20h11V9.5"/><path d="M10 20v-6h4v6"/></svg>',
@@ -72,7 +75,9 @@ def _logo_data_uri() -> str | None:
     return f"data:{mime_type};base64,{base64.b64encode(EN_BANK_LOGO_PATH.read_bytes()).decode('ascii')}"
 
 
-def render_navigation() -> None:
+def render_navigation(
+    *, active_view: str = HOME_VIEW, active_scenario: ScenarioType | None = None
+) -> None:
     """Render native page links inside the custom right navigation panel."""
     logo_html = ""
     logo_data_uri = _logo_data_uri()
@@ -85,18 +90,39 @@ def render_navigation() -> None:
             unsafe_allow_html=True,
         )
         utility_links = "".join(
-            f'<a class="scenario-nav-link" href="{href}" target="_self">{icon_svg(icon)} '
+            f'<a class="scenario-nav-link{" active" if active_scenario is None and active_view == view else ""}" href="{href}" '
+            f'target="_self">{icon_svg(icon)} '
             f'<span>{html.escape(label)}</span></a>'
-            for icon, label, href in UTILITY_NAVIGATION_ITEMS
+            for view, (icon, label, href) in zip(
+                (HOME_VIEW, SAVED_SCENARIOS_VIEW), UTILITY_NAVIGATION_ITEMS
+            )
         )
         st.markdown(f'<nav class="utility-nav">{utility_links}</nav>', unsafe_allow_html=True)
-        current = st.session_state.get(SENSITIVITY_DRAFT_KEY, {}).get("scenario_type")
         links = []
         for item in SCENARIO_DEFINITIONS:
-            active = " active" if current is item.scenario_type else ""
+            active = " active" if active_scenario is item.scenario_type else ""
             links.append(
                 f'<a class="scenario-nav-link{active}" href="{scenario_href(item.scenario_type)}" '
                 f'target="_self">{icon_svg(item.icon)}'
                 f'<span>{html.escape(item.label)}</span></a>'
             )
         st.markdown(f'<nav class="scenario-nav">{"".join(links)}</nav>', unsafe_allow_html=True)
+        try:
+            current_user = load_current_user(ROOT / "config" / "local_user.json")
+            display_name = current_user.display_name
+            role_label = "مدیر ارشد" if "staff_user" in current_user.roles else "کاربر شعبه"
+        except (FileNotFoundError, ValueError, OSError):
+            display_name = "کاربر سامانه"
+            role_label = "کاربر"
+        st.markdown(
+            '<div class="nav-user-card" data-user-profile="current-user">'
+            '<span class="nav-user-toggle" aria-hidden="true">⌄</span>'
+            '<div class="nav-user-text">'
+            f'<strong>{html.escape(display_name)}</strong>'
+            f'<small>{html.escape(role_label)}</small>'
+            '</div>'
+            '<span class="nav-user-avatar" aria-hidden="true">'
+            '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.25" r="3.25"/>'
+            '<path d="M5.5 20c.7-4 3-6 6.5-6s5.8 2 6.5 6"/></svg></span></div>',
+            unsafe_allow_html=True,
+        )

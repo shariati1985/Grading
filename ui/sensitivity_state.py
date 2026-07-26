@@ -137,6 +137,12 @@ def reset_sensitivity_draft(state: MutableMapping[str, Any]) -> None:
     initialize_sensitivity_state(state)
     mode = state[SENSITIVITY_DRAFT_KEY].get("scenario_type")
     state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+    for key in list(state):
+        text = str(key)
+        if text in {"sensitivity_focus_branch", "official_result_branch"} or text.startswith(
+            ("select_FOCUS_BRANCH_ONLY_", "focus_op_", "focus_value_", "focus_direction_")
+        ):
+            state.pop(key, None)
 
 
 def copy_sensitivity_draft(state: MutableMapping[str, Any]) -> dict[str, Any]:

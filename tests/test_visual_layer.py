@@ -20,16 +20,25 @@ from domain.scenario_contracts import ScenarioType
 from ui.navigation import (
     EN_BANK_LOGO_PATH,
     EN_BANK_LOGO_RELATIVE_PATH,
+    HOME_VIEW,
     NAVIGATION_ITEMS,
+    SAVED_SCENARIOS_VIEW,
     UTILITY_NAVIGATION_ITEMS,
     icon_svg,
     _logo_data_uri,
     scenario_href,
     scenario_mode_from_query,
 )
-from ui.sensitivity_components import indicator_cards_html, summary_cards_html, value_comparison_html
+from ui.formatters import format_number, format_persian_number, persian_digits
+from ui.sensitivity_components import (
+    indicator_cards_html,
+    render_wizard_steps,
+    summary_cards_html,
+    value_comparison_html,
+)
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS, SCENARIO_TYPE_LABELS
 from ui.scenario_workflow import INDICATOR_LABELS, INDICATOR_ORDER
+from app import home_markup, overview_markup
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -202,6 +211,145 @@ def test_home_visual_contract_uses_reference_palette_and_no_underlines() -> None
     assert "home-page-reference.png" not in app_source
 
 
+def test_persian_font_stack_is_centralized_and_scoped_to_app_shell() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    assert '--app-font-fa: "Vazirmatn", "IRANSansX", "IRANSans", "Segoe UI", Tahoma, Arial, sans-serif;' in css_source
+    assert "--font: var(--app-font-fa);" in css_source
+    assert '[data-testid="stAppViewContainer"] *' in css_source
+    assert '[data-testid="stSidebar"] *' in css_source
+    assert '[data-testid="stMarkdownContainer"] *' in css_source
+    assert '[data-testid="stWidgetLabel"]' in css_source
+    assert "button," in css_source
+    assert "font-family: var(--font) !important" in css_source
+    assert "@import" not in css_source
+    assert "fonts.googleapis.com" not in css_source
+    assert "fonts.gstatic.com" not in css_source
+    assert "Times New Roman" not in css_source
+    assert "serif" not in css_source.replace("sans-serif", "")
+
+
+def test_local_persian_font_assets_are_not_fabricated_or_externally_loaded() -> None:
+    font_assets = [
+        path
+        for path in ROOT.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".woff", ".woff2", ".ttf", ".otf"}
+    ]
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    if font_assets:
+        assert "@font-face" in css_source
+    else:
+        assert "@font-face" not in css_source
+        assert '--app-font-fa: "Vazirmatn", "IRANSansX", "IRANSans", "Segoe UI", Tahoma, Arial, sans-serif;' in css_source
+
+
+def test_home_omits_duplicate_user_profile_and_header_offset_remains() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    markup = home_markup(branch_count=324, saved_count="168")
+    main_rule = css_source.split(".block-container {", 1)[1].split("}", 1)[0]
+
+    assert "home-user-chip" not in markup
+    assert 'data-user-profile="current-user"' not in markup
+    assert "خوش آمدید" not in markup
+    assert "_workspace_service().current_user.display_name" not in app_source
+    assert '[data-testid="stMainBlockContainer"],' in css_source
+    assert "var(--streamlit-header-offset)" in main_rule
+    assert "nth-child" not in css_source
+    assert "<script" not in css_source
+
+
+def test_rtl_icon_layout_puts_icon_before_persian_label_without_row_reverse() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    nav_rule = css_source.split(".scenario-nav-link {", 1)[1].split("}", 1)[0]
+    icon_rule = css_source.split(".scenario-nav-link svg {", 1)[1].split("}", 1)[0]
+    action_rule = css_source.split(".decision-panel-action {", 1)[1].split("}", 1)[0]
+    card_action_rule = css_source.split(".scenario-card-start {", 1)[1].split("}", 1)[0]
+    assert "display: flex" in nav_rule
+    assert "direction: rtl" in nav_rule
+    assert "flex-direction: row;" in nav_rule
+    assert "row-reverse" not in nav_rule
+    assert "width: 22px" in icon_rule and "height: 22px" in icon_rule
+    assert "stroke-width: 1.8" in icon_rule
+    assert "flex-shrink: 0" in icon_rule
+    assert "direction: rtl" in action_rule and "flex-direction: row" in action_rule
+    assert "direction: rtl" in card_action_rule and "flex-direction: row" in card_action_rule
+
+
+def test_navigation_active_markup_is_explicit_and_exclusive() -> None:
+    from ui.navigation import render_navigation
+
+    source = (ROOT / "ui" / "navigation.py").read_text(encoding="utf-8")
+    assert "active_view: str = HOME_VIEW" in source
+    assert "active_scenario: ScenarioType | None = None" in source
+    assert "SENSITIVITY_DRAFT_KEY" not in source
+    assert 'active_scenario is None and active_view == view' in source
+    assert 'active_scenario is item.scenario_type' in source
+    assert HOME_VIEW == "home"
+    assert SAVED_SCENARIOS_VIEW == "saved"
+    assert render_navigation
+
+
+def test_home_markup_excludes_saved_scenario_list_but_keeps_aggregate_metric() -> None:
+    markup = home_markup(branch_count=324, saved_count="168") + overview_markup(branch_count=324, saved_count="168")
+    assert "سناریوی ذخیره‌شده توسط کاربران" in markup
+    assert "سناریوهای ذخیره‌شده" not in markup
+    assert "saved-scenario-card" not in markup
+    assert "workspace_open_" not in markup
+    assert "بازکردن و ادامه" not in markup
+    assert "مشاهده نتیجه" not in markup
+
+
+def test_management_overview_cards_have_polished_rtl_typography_and_icons() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    markup = overview_markup(branch_count=324, saved_count="168")
+    article_rule = css_source.split(".home-overview-grid article {", 1)[1].split("}", 1)[0]
+    content_rule = css_source.split(".overview-content {", 1)[1].split("}", 1)[0]
+    value_rule = css_source.split(".home-overview-grid .overview-value {", 1)[1].split("}", 1)[0]
+    label_rule = css_source.split(".home-overview-grid .overview-label {", 1)[1].split("}", 1)[0]
+    icon_rule = css_source.split(".overview-icon {", 1)[1].split("}", 1)[0]
+    icon_svg_rule = css_source.split(".overview-icon svg {", 1)[1].split("}", 1)[0]
+
+    assert 'class="overview-content"' in markup
+    assert 'class="overview-value numeric-ltr" dir="ltr"' in markup
+    assert 'class="overview-label"' in markup
+    assert markup.count('class="overview-icon"') == 3
+    assert markup.count("<svg") == 3
+    assert "1404-04" in markup
+    assert "flex-direction: row" in article_rule
+    assert "row-reverse" not in article_rule
+    assert "direction: rtl" in article_rule
+    assert "justify-content: space-between" in article_rule
+    assert "text-align: right" in article_rule
+    assert "font-family: var(--font) !important" in article_rule
+    assert "align-items: flex-start" in content_rule
+    assert "text-align: right" in content_rule
+    assert "font-weight: 700" in value_rule
+    assert "font-family: var(--font) !important" in value_rule
+    assert "line-height: 1.7" in value_rule
+    assert "font-weight: 600" in label_rule
+    assert "text-align: right" in label_rule
+    assert "flex: 0 0 58px" in icon_rule
+    assert "width: 34px" in icon_svg_rule and "height: 34px" in icon_svg_rule
+    assert "stroke-width: 1.75" in icon_svg_rule
+
+
+def test_saved_scenarios_are_dedicated_view_only_and_preserve_actions() -> None:
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    home_body = app_source.split("def render_home_page", 1)[1].split("def render_saved_scenarios_view", 1)[0]
+    saved_body = app_source.split("def render_saved_scenarios_view", 1)[1].split("def main", 1)[0]
+    main_body = app_source.split("def main", 1)[1]
+    assert "saved-scenario-card" not in home_body
+    assert "workspace_open_" not in home_body
+    assert "سناریوهای ذخیره‌شده" not in home_body
+    assert "saved-scenario-card" in saved_body
+    assert "workspace_open_" in saved_body
+    assert "workspace_result_" in saved_body
+    assert "workspace_version_" in saved_body
+    assert "ask_delete_" in saved_body
+    assert "render_saved_scenarios_view(data, records)" in main_body
+    assert "return" in main_body.split("render_saved_scenarios_view(data, records)", 1)[1].split("render_home_page", 1)[0]
+
+
 def test_result_page_action_labels_and_removed_stepper_contract() -> None:
     source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
     assert '"ذخیره نتیجه"' in source
@@ -210,6 +358,138 @@ def test_result_page_action_labels_and_removed_stepper_contract() -> None:
     assert '"ایجاد نسخه کپی"' not in source
     assert '"سناریوی جدید"' not in source
     assert '("وضعیت فعلی", "اعمال تغییرات", "اجرای مدل رسمی", "نتیجه سناریو")' not in source
+
+
+def test_branch_focused_stepper_preserves_labels_order_and_real_state(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_markdown(markup: str, **_: object) -> None:
+        captured["markup"] = markup
+
+    monkeypatch.setattr("ui.sensitivity_components.st.markdown", fake_markdown)
+    labels = ("انتخاب شعبه", "انتخاب شاخص‌ها", "تعریف تغییرات", "بازبینی و اجرا")
+    render_wizard_steps(labels, 3)
+    markup = captured["markup"]
+
+    assert 'class="wizard-steps" dir="rtl"' in markup
+    assert [markup.index(label) for label in labels] == sorted(markup.index(label) for label in labels)
+    assert markup.count('data-step-state="completed"') == 2
+    assert markup.count('data-step-state="active"') == 1
+    assert markup.count('data-step-state="future"') == 1
+    assert markup.count("wizard-step ") == 4
+    assert markup.count("wizard-connector") == 3
+    assert markup.count("wizard-step-completed") == 2
+    assert markup.count("wizard-step-active") == 1
+    assert markup.count("wizard-step-future") == 1
+    assert ">۱<" in markup
+    assert ">۲<" in markup
+    assert ">۳<" in markup
+    assert ">۴<" in markup
+    assert "۱. انتخاب شعبه" in markup
+    assert "۲. انتخاب شاخص‌ها" in markup
+    assert "<svg" not in markup
+    assert "Material" not in markup
+    assert "keyboard_" not in markup
+
+
+def test_branch_focused_step_one_uses_existing_bindings_and_no_demo_values() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    expected_steps = '("انتخاب شعبه", "انتخاب شاخص‌ها", "تعریف تغییرات", "بازبینی و اجرا")'
+
+    assert expected_steps in source
+    assert 'key="sensitivity_focus_branch"' in source
+    assert "set_focus_branch(draft, chosen" in source
+    assert "FocusBranchSource.USER_SELECTED_BRANCH.value if chosen else None" in source
+    assert "LOCAL_ADMINISTRATIVE_TESTING_MODE" in source
+    assert "data-branch-step=\"focus-step-1\"" in source
+    assert 'key="sensitivity_scenario_name"' in source
+    assert "_save_draft(draft)" in source
+    assert "scenario-name-panel" in source
+    assert "scenario-save-status" in source
+    assert "branch-summary-panel" in source
+    assert "branch-info-card" in source
+    assert "data-selected-branch-banner" in source
+    assert "<bdi>" in source
+    assert "persian_digits(branch_id)" in source
+    assert "format_persian_number(result[\"rank\"], decimals=0)" in source
+    assert "format_persian_number(result[\"final_score\"], decimals=1)" in source
+    assert "_selected_branch_banner(str(draft[\"focus_branch_id\"]), names)" in source
+    assert 'raw[BRANCH_NAME]' in source
+    assert 'raw[BRANCH_ID]' in source
+    assert 'raw[REGION]' in source
+    assert 'result["rank"]' in source
+    assert 'result["final_score"]' in source
+    assert 'result["grade"]' in source
+    assert "دولت" not in source
+    assert "1135" not in source
+    assert "درجه 1" not in source
+
+
+    assert "پاک‌کردن سناریو" not in source.split("def _navigation", 1)[1].split("def main", 1)[0]
+    state_source = (ROOT / "ui" / "sensitivity_state.py").read_text(encoding="utf-8")
+    assert "def reset_sensitivity_draft" in state_source
+
+
+def test_persian_digit_formatter_is_presentation_only() -> None:
+    assert format_number(728, decimals=1) == "728.0"
+    assert format_persian_number(728, decimals=1) == "۷۲۸٫۰"
+    assert persian_digits("105,200.5") == "۱۰۵٬۲۰۰٫۵"
+    assert persian_digits("-9%") == "−۹%"
+
+
+def test_branch_step_styles_are_scoped_responsive_and_svg_based() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    step_rule = css_source.split(".wizard-steps {", 1)[1].split("}", 1)[0]
+    branch_rule = css_source.split(".branch-step-panel {", 1)[1].split("}", 1)[0]
+    card_rule = css_source.split(".branch-info-card {", 1)[1].split("}", 1)[0]
+    icon_rule = css_source.split(".branch-info-icon svg {", 1)[1].split("}", 1)[0]
+    header_rule = css_source.split(".scenario-builder-header {", 1)[1].split("}", 1)[0]
+    header_title_rule = css_source.split(".scenario-builder-header h1 {", 1)[1].split("}", 1)[0]
+    name_input_rule = css_source.split(".scenario-name-panel input {", 1)[1].split("}", 1)[0]
+
+    assert "direction: rtl" in step_rule
+    assert "grid-template-columns:" in step_rule
+    assert "minmax(22px, .55fr)" in step_rule
+    assert ".wizard-step-completed" in css_source
+    assert ".wizard-step-future" in css_source
+    assert ".wizard-connector" in css_source
+    assert ".wizard-step::after" not in css_source
+    assert "font-family: var(--font) !important" in css_source
+    assert "background: transparent" in branch_rule
+    assert "box-shadow: none" in branch_rule
+    assert "flex-direction: row" in card_rule
+    assert "direction: rtl" in card_rule
+    assert "flex-shrink: 0" in css_source.split(".branch-info-icon {", 1)[1].split("}", 1)[0]
+    assert "width: 30px" in icon_rule and "height: 30px" in icon_rule
+    assert "stroke-width: 1.75" in icon_rule
+    assert "justify-content: flex-start" in header_rule
+    assert "direction: rtl" in header_rule
+    assert "align-items: center" in header_rule
+    assert "font-weight: 700" in header_title_rule
+    assert "text-align: right" in header_title_rule
+    assert "direction: rtl" in name_input_rule
+    assert "text-align: right" in name_input_rule
+    assert ".scenario-save-status" in css_source
+    assert ".branch-info-alert" in css_source
+    assert ".selected-branch-banner" in css_source
+    assert "unicode-bidi: isolate" in css_source
+    assert ".numeric-fa" in css_source
+    assert ".builder-action-row" in css_source
+    assert ".builder-action-row + [data-testid=\"stHorizontalBlock\"] button" in css_source
+    assert "@media (max-width: 900px)" in css_source
+    assert "nth-child" not in css_source
+
+
+def test_sidebar_profile_card_uses_user_config_binding_and_official_logo() -> None:
+    source = (ROOT / "ui" / "navigation.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+
+    assert "load_current_user(ROOT / \"config\" / \"local_user.json\")" in source
+    assert 'data-user-profile="current-user"' in source
+    assert "display_name = current_user.display_name" in source
+    assert "logo-1.png" in source
+    assert ".nav-user-card" in css_source
+    assert "margin-top: auto" in css_source
 
 
 def test_preview_html_contains_complete_very_large_values() -> None:

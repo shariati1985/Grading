@@ -119,7 +119,7 @@ def build_multi_request(draft: dict[str, Any]) -> ScenarioRequest:
 
 def build_target_request(draft: dict[str, Any]) -> TargetRankRequest:
     if draft.get("scenario_type") is not ScenarioType.TARGET_RANK:
-        raise ValueError("اطلاعات این حالت با تحلیل رتبه هدف سازگار نیست.")
+        raise ValueError("اطلاعات این حالت با سناریوی رتبه هدف سازگار نیست.")
     settings = draft.get("target_rank_request", {})
     selected = unique_indicator_ids(draft.get("selected_indicator_ids", []))
     focus = str(draft.get("focus_branch_id") or "").strip()

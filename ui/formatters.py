@@ -12,6 +12,7 @@ GRADE_LABELS: dict[str, str] = {
     "Grade 2": "درجه ۲",
     "Grade 3": "درجه ۳",
 }
+_PERSIAN_DIGITS = str.maketrans("0123456789,.-", "۰۱۲۳۴۵۶۷۸۹٬٫−")
 
 
 def _finite_number(value: object) -> float | None:
@@ -26,6 +27,16 @@ def format_number(value: object, decimals: int = 0) -> str:
     """Format a finite number with grouping, or return a neutral dash."""
     number = _finite_number(value)
     return "—" if number is None else f"{number:,.{decimals}f}"
+
+
+def persian_digits(value: object) -> str:
+    """Render presentation text with Persian digits and separators."""
+    return str(value).translate(_PERSIAN_DIGITS)
+
+
+def format_persian_number(value: object, decimals: int = 0) -> str:
+    """Format a finite number for Persian UI display without changing data."""
+    return persian_digits(format_number(value, decimals=decimals))
 
 
 def format_score(value: object) -> str:
@@ -58,21 +69,38 @@ def format_managerial_number(value: object) -> str:
     return format_number(number, decimals=1).rstrip("0").rstrip(".")
 
 
+_DIGIT_TRANSLATION = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٫−",
+    "01234567890123456789.-",
+)
+_SUPPORTED_GROUP_SEPARATORS = ",٬،'’_ \u00a0\u2009\u202f"
+
+
 def format_editable_number(value: object) -> str:
-    """Format an editable numeric value with separators and stable precision."""
+    """Format analytically precise editable values."""
     return format_compact_number(value, max_decimals=6)
+
+
+def format_raw_input_value(value: object) -> str:
+    """Format raw scenario inputs as whole grouped values."""
+    return format_raw_value(value)
 
 
 def parse_formatted_number(value: object) -> float:
     """Parse grouped Latin/Persian numeric input into a finite float."""
-    translation = str.maketrans("۰۱۲۳۴۵۶۷۸۹٫−", "0123456789.-")
-    text = str(value).translate(translation).replace("٬", "").replace(",", "").strip()
+    text = str(value).translate(_DIGIT_TRANSLATION).strip()
+    text = re.sub(f"[{re.escape(_SUPPORTED_GROUP_SEPARATORS)}]", "", text)
     if not text or not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", text):
         raise ValueError("مقدار واردشده باید یک عدد معتبر باشد.")
     number = float(text)
     if not math.isfinite(number):
         raise ValueError("مقدار واردشده باید یک عدد متناهی باشد.")
     return number
+
+
+def parse_raw_input_value(value: object) -> float:
+    """Parse a raw indicator value and discard immaterial decimal places."""
+    return float(round(parse_formatted_number(value)))
 
 
 def format_rank(value: object) -> str:

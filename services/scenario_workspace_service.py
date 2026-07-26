@@ -260,14 +260,8 @@ class ScenarioWorkspaceService:
         else:
             raise ValueError("نتیجه رسمی اجرا برای ذخیره در دسترس نیست.")
         persisted = dict(draft.get("persistence") or {})
-        save_as_new = persisted.get("status") == "executed"
+        save_as_new = False
         lineage = self._lineage(draft)
-        if save_as_new:
-            lineage = {
-                "lineage_id": lineage["lineage_id"],
-                "version_number": int(lineage["version_number"]) + 1,
-                "parent_scenario_id": persisted.get("scenario_id"),
-            }
         record = self.management.save_executed(
             scenario_name=str(draft.get("scenario_name") or "").strip(),
             baseline_period=str(draft.get("period") or ""), selected_branch_ids=selected,

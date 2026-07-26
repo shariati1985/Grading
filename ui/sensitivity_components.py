@@ -9,7 +9,7 @@ import streamlit as st
 from ui.navigation import scenario_href
 from ui.navigation import icon_svg
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS
-from ui.formatters import format_compact_number, format_percentage
+from ui.formatters import format_compact_number, format_percentage, persian_digits
 
 
 def render_scenario_cards() -> None:
@@ -103,12 +103,18 @@ def render_indicator_cards(items: list[dict[str, str]]) -> None:
 
 
 def render_wizard_steps(labels: tuple[str, ...], current_step: int) -> None:
-    cells = "".join(
-        f"<div class='wizard-step {'active' if index == current_step else ''}'>"
-        f"{index}. {html.escape(label)}</div>"
-        for index, label in enumerate(labels, 1)
-    )
-    st.markdown(f"<div class='wizard-steps'>{cells}</div>", unsafe_allow_html=True)
+    cells = []
+    for index, label in enumerate(labels, 1):
+        state = "completed" if index < current_step else "active" if index == current_step else "future"
+        number = persian_digits(index)
+        cells.append(
+            f'<div class="wizard-step wizard-step-{state} {"active" if state == "active" else ""}" data-step-state="{state}">'
+            f'<span class="wizard-step-index" aria-hidden="true">{number}</span>'
+            f'<span class="wizard-step-label">{number}. {html.escape(label)}</span></div>'
+        )
+        if index < len(labels):
+            cells.append('<span class="wizard-connector" aria-hidden="true"></span>')
+    st.markdown(f'<div class="wizard-steps" dir="rtl">{"".join(cells)}</div>', unsafe_allow_html=True)
 
 
 def render_process_timeline(labels: tuple[str, ...]) -> None:

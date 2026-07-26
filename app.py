@@ -12,9 +12,14 @@ from ui import initialize_session_state
 from ui.components import render_empty_state
 from ui.data_access import load_dashboard_data
 from ui.sensitivity_labels import SCENARIO_TYPE_LABELS
-from ui.sensitivity_state import SESSION_HISTORY_KEY
 from ui.sensitivity_components import render_scenario_cards
-from ui.navigation import activate_requested_scenario, scenario_href
+from ui.navigation import (
+    HOME_VIEW,
+    SAVED_SCENARIOS_VIEW,
+    activate_requested_scenario,
+    icon_svg,
+    scenario_href,
+)
 from services.factory import create_local_scenario_service
 from services.scenario_workspace_service import PERSISTENCE_STATUS_LABELS, ScenarioWorkspaceService
 from persistence.contracts import ScenarioPersistenceError
@@ -65,29 +70,13 @@ def _new_version(scenario_id: str) -> None:
     _open_saved(created.scenario_id)
 
 
-def main() -> None:
-    initialize_session_state()
-    activate_requested_scenario()
-    apply_global_styles()
-    st.markdown(
-        '<header class="bank-hero"><div class="bank-logo-slot" aria-label="بانک اقتصاد نوین"></div>'
-        '<div><h1>سامانه تحلیل حساسیت درجه‌بندی شعب</h1>'
-        '<p>ارزیابی اثر تغییر شاخص‌ها بر رتبه، امتیاز و درجه شعبه</p></div></header>',
-        unsafe_allow_html=True,
-    )
-    try:
-        data, _ = _context()
-    except (FileNotFoundError, ValueError, OSError):
-        st.error("اطلاعات مبنا در دسترس نیست. لطفاً فایل داده را بررسی کنید.")
-        return
-    try:
-        records = _workspace_service().list_scenarios(limit=100)
-    except (ScenarioPersistenceError, ValueError, OSError):
-        records = None
-    saved_count = "نامشخص" if records is None else f"{len(records):,}"
-    st.markdown(
+def current_home_view() -> str:
+    return SAVED_SCENARIOS_VIEW if st.query_params.get("view") == SAVED_SCENARIOS_VIEW else HOME_VIEW
+
+
+def home_markup(*, branch_count: int, saved_count: str) -> str:
+    return (
         '<section class="home-page-header">'
-        '<div class="home-user-chip"><span class="home-user-icon" aria-hidden="true"></span><div><b>خوش آمدید، مدیر</b><small>دوره مبنا: 1404-04</small></div></div>'
         '<h1>سامانه تحلیل حساسیت و درجه‌بندی شعب</h1>'
         '<p>تحلیل سناریوهای مالی و عملیاتی شعب برای تصمیم‌گیری هوشمندانه و بهبود عملکرد</p>'
         '</section>'
@@ -95,36 +84,58 @@ def main() -> None:
         '<div class="decision-panel-pattern" aria-hidden="true"></div>'
         '<h2>تصمیم‌گیری هوشمند با تحلیل سناریو</h2>'
         '<p>با استفاده از سناریوهای متنوع، حساسیت متغیرهای کلیدی را بررسی کرده و بهترین مسیر را برای رشد و ارتقای عملکرد شعب انتخاب کنید.</p>'
-        f'<a class="decision-panel-action" href="{html.escape(scenario_href(ScenarioType.FOCUS_BRANCH_ONLY))}" target="_self">ایجاد سناریوی جدید <span aria-hidden="true">←</span></a>'
+        f'<a class="decision-panel-action" href="{html.escape(scenario_href(ScenarioType.FOCUS_BRANCH_ONLY))}" target="_self"><span aria-hidden="true">←</span> ایجاد سناریوی جدید</a>'
+        '</section>'
+        '<h2 class="home-section-title">انتخاب نوع سناریو</h2>'
+    )
+
+
+def overview_markup(*, branch_count: int, saved_count: str) -> str:
+    document_icon = (
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h8l3 3V20h-11z"/>'
+        '<path d="M14.5 3.5v3h3"/><path d="M9 11h6"/><path d="M9 15h6"/></svg>'
+    )
+    clock_icon = (
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/>'
+        '<path d="M12 7.5V12l3.25 2"/></svg>'
+    )
+    return (
+        '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
+        '<div class="home-overview-grid">'
+        f'<article><div class="overview-content"><b class="overview-value numeric-ltr" dir="ltr">{branch_count:,}</b><small class="overview-label">شعبه فعال در سامانه</small></div><span class="overview-icon">{icon_svg("bank")}</span></article>'
+        f'<article><div class="overview-content"><b class="overview-value numeric-ltr" dir="ltr">{html.escape(saved_count)}</b><small class="overview-label">سناریوی ذخیره‌شده توسط کاربران</small></div><span class="overview-icon">{document_icon}</span></article>'
+        f'<article><div class="overview-content"><b class="overview-value numeric-ltr" dir="ltr">1404-04</b><small class="overview-label">دوره مبنای تحلیل</small></div><span class="overview-icon">{clock_icon}</span></article>'
+        '</div>'
+    )
+
+
+def render_home_page(data, saved_count: str) -> None:
+    st.markdown(
+        home_markup(
+            branch_count=len(data),
+            saved_count=saved_count,
+        ),
+        unsafe_allow_html=True,
+    )
+    render_scenario_cards()
+    st.markdown(overview_markup(branch_count=len(data), saved_count=saved_count), unsafe_allow_html=True)
+
+
+def render_saved_scenarios_view(data, records) -> None:
+    st.markdown(
+        '<section class="saved-view-header" id="saved-scenarios">'
+        '<h1>سناریوهای ذخیره‌شده</h1>'
+        f'<p>{len(records):,} سناریوی ذخیره‌شده در دسترس است.</p>'
         '</section>',
         unsafe_allow_html=True,
     )
-    st.markdown('<h2 class="home-section-title">انتخاب نوع سناریو</h2>', unsafe_allow_html=True)
-    render_scenario_cards()
-    st.markdown(
-        '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
-        '<div class="home-overview-grid">'
-        f'<article><span class="overview-icon bank"></span><div><b>{len(data):,}</b><small>شعبه فعال در سامانه</small></div></article>'
-        f'<article><span class="overview-icon document"></span><div><b>{saved_count}</b><small>سناریوی ذخیره‌شده توسط کاربران</small></div></article>'
-        '<article><span class="overview-icon clock"></span><div><b>1404-04</b><small>دوره مبنای تحلیل</small></div></article>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('<h2 class="home-section-title">سناریوهای این نشست</h2>', unsafe_allow_html=True)
-    history = st.session_state[SESSION_HISTORY_KEY]
-    if not history:
-        render_empty_state("در این نشست هنوز سناریویی اجرا نشده است.")
-    else:
-        st.dataframe(history, width="stretch", hide_index=True)
-    st.markdown('<h2 class="home-section-title">سناریوهای ذخیره‌شده</h2>', unsafe_allow_html=True)
-    st.markdown('<div id="saved-scenarios"></div>', unsafe_allow_html=True)
-    if records is None:
-        st.error("فهرست سناریوهای ذخیره‌شده در دسترس نیست.")
-        return
     if not records:
         render_empty_state("هنوز سناریوی ذخیره‌شده‌ای وجود ندارد.")
         return
-    branch_names = data.assign(branch_id=data["branch_id"].astype(str)).set_index("branch_id")["branch_name"].astype(str).to_dict()
+    try:
+        branch_names = data.assign(branch_id=data["branch_id"].astype(str)).set_index("branch_id")["branch_name"].astype(str).to_dict()
+    except (KeyError, ValueError):
+        branch_names = {}
     for item in records:
         lineage = dict(item.summary.get("phase3b_lineage") or {})
         version = int(lineage.get("version_number") or 1)
@@ -168,6 +179,30 @@ def main() -> None:
                     else: st.session_state.pop("confirm_scenario_delete", None); st.rerun()
                 if confirm[1].button("انصراف", key=f"cancel_delete_{item.scenario_id}"):
                     st.session_state.pop("confirm_scenario_delete", None); st.rerun()
+
+
+def main() -> None:
+    initialize_session_state()
+    activate_requested_scenario()
+    view = current_home_view()
+    apply_global_styles(active_view=view)
+    try:
+        data, _ = _context()
+    except (FileNotFoundError, ValueError, OSError):
+        st.error("اطلاعات مبنا در دسترس نیست. لطفاً فایل داده را بررسی کنید.")
+        return
+    try:
+        records = _workspace_service().list_scenarios(limit=100)
+    except (ScenarioPersistenceError, ValueError, OSError):
+        records = None
+    if view == SAVED_SCENARIOS_VIEW:
+        if records is None:
+            st.error("فهرست سناریوهای ذخیره‌شده در دسترس نیست.")
+            return
+        render_saved_scenarios_view(data, records)
+        return
+    saved_count = "نامشخص" if records is None else f"{len(records):,}"
+    render_home_page(data, saved_count)
 
 
 if __name__ == "__main__":
