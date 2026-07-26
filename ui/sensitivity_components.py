@@ -7,6 +7,7 @@ import html
 import streamlit as st
 
 from ui.navigation import scenario_href
+from ui.navigation import icon_svg
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS
 from ui.formatters import format_compact_number, format_percentage
 
@@ -18,9 +19,9 @@ def render_scenario_cards() -> None:
         href = scenario_href(item.scenario_type)
         cards.append(
             f'<a class="scenario-card {html.escape(item.color)}" href="{href}" target="_self">'
-            f'<span class="scenario-card-icon">{html.escape(item.icon)}</span>'
+            f'<span class="scenario-card-icon">{icon_svg(item.icon)}</span>'
             f'<h3>{html.escape(item.label)}</h3><p>{html.escape(item.description)}</p>'
-            '<span class="scenario-card-start">شروع</span></a>'
+            f'<span class="scenario-card-start">ایجاد {html.escape(item.label)} <b aria-hidden="true">←</b></span></a>'
         )
     st.markdown(f'<div class="scenario-card-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
 

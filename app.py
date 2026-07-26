@@ -14,7 +14,7 @@ from ui.data_access import load_dashboard_data
 from ui.sensitivity_labels import SCENARIO_TYPE_LABELS
 from ui.sensitivity_state import SESSION_HISTORY_KEY
 from ui.sensitivity_components import render_scenario_cards
-from ui.navigation import activate_requested_scenario
+from ui.navigation import activate_requested_scenario, scenario_href
 from services.factory import create_local_scenario_service
 from services.scenario_workspace_service import PERSISTENCE_STATUS_LABELS, ScenarioWorkspaceService
 from persistence.contracts import ScenarioPersistenceError
@@ -80,22 +80,45 @@ def main() -> None:
     except (FileNotFoundError, ValueError, OSError):
         st.error("اطلاعات مبنا در دسترس نیست. لطفاً فایل داده را بررسی کنید.")
         return
-    context = st.columns(2)
-    context[0].metric("دوره مبنا", "1404-04")
-    context[1].metric("تعداد شعب", f"{len(data):,}")
-    st.markdown("### انتخاب نوع سناریو")
+    try:
+        records = _workspace_service().list_scenarios(limit=100)
+    except (ScenarioPersistenceError, ValueError, OSError):
+        records = None
+    saved_count = "نامشخص" if records is None else f"{len(records):,}"
+    st.markdown(
+        '<section class="home-page-header">'
+        '<div class="home-user-chip"><span class="home-user-icon" aria-hidden="true"></span><div><b>خوش آمدید، مدیر</b><small>دوره مبنا: 1404-04</small></div></div>'
+        '<h1>سامانه تحلیل حساسیت و درجه‌بندی شعب</h1>'
+        '<p>تحلیل سناریوهای مالی و عملیاتی شعب برای تصمیم‌گیری هوشمندانه و بهبود عملکرد</p>'
+        '</section>'
+        '<section class="home-decision-panel">'
+        '<div class="decision-panel-pattern" aria-hidden="true"></div>'
+        '<h2>تصمیم‌گیری هوشمند با تحلیل سناریو</h2>'
+        '<p>با استفاده از سناریوهای متنوع، حساسیت متغیرهای کلیدی را بررسی کرده و بهترین مسیر را برای رشد و ارتقای عملکرد شعب انتخاب کنید.</p>'
+        f'<a class="decision-panel-action" href="{html.escape(scenario_href(ScenarioType.FOCUS_BRANCH_ONLY))}" target="_self">ایجاد سناریوی جدید <span aria-hidden="true">←</span></a>'
+        '</section>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<h2 class="home-section-title">انتخاب نوع سناریو</h2>', unsafe_allow_html=True)
     render_scenario_cards()
-    st.markdown("### سناریوهای این نشست")
+    st.markdown(
+        '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
+        '<div class="home-overview-grid">'
+        f'<article><span class="overview-icon bank"></span><div><b>{len(data):,}</b><small>شعبه فعال در سامانه</small></div></article>'
+        f'<article><span class="overview-icon document"></span><div><b>{saved_count}</b><small>سناریوی ذخیره‌شده توسط کاربران</small></div></article>'
+        '<article><span class="overview-icon clock"></span><div><b>1404-04</b><small>دوره مبنای تحلیل</small></div></article>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<h2 class="home-section-title">سناریوهای این نشست</h2>', unsafe_allow_html=True)
     history = st.session_state[SESSION_HISTORY_KEY]
     if not history:
         render_empty_state("در این نشست هنوز سناریویی اجرا نشده است.")
     else:
         st.dataframe(history, width="stretch", hide_index=True)
-    st.markdown("### سناریوهای ذخیره‌شده")
+    st.markdown('<h2 class="home-section-title">سناریوهای ذخیره‌شده</h2>', unsafe_allow_html=True)
     st.markdown('<div id="saved-scenarios"></div>', unsafe_allow_html=True)
-    try:
-        records = _workspace_service().list_scenarios(limit=100)
-    except (ScenarioPersistenceError, ValueError, OSError):
+    if records is None:
         st.error("فهرست سناریوهای ذخیره‌شده در دسترس نیست.")
         return
     if not records:

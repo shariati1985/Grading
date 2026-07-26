@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -15,10 +17,21 @@ from ui.charts import (
     validate_indicator_score_chart_matches_table,
 )
 from domain.scenario_contracts import ScenarioType
-from ui.navigation import NAVIGATION_ITEMS, UTILITY_NAVIGATION_ITEMS, scenario_href, scenario_mode_from_query
+from ui.navigation import (
+    EN_BANK_LOGO_PATH,
+    EN_BANK_LOGO_RELATIVE_PATH,
+    NAVIGATION_ITEMS,
+    UTILITY_NAVIGATION_ITEMS,
+    icon_svg,
+    _logo_data_uri,
+    scenario_href,
+    scenario_mode_from_query,
+)
 from ui.sensitivity_components import indicator_cards_html, summary_cards_html, value_comparison_html
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS, SCENARIO_TYPE_LABELS
 from ui.scenario_workflow import INDICATOR_LABELS, INDICATOR_ORDER
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _indicator_comparison() -> pd.DataFrame:
@@ -131,9 +144,10 @@ def test_empty_network_result_returns_no_chart() -> None:
 
 def test_persian_navigation_labels_and_icons_are_complete() -> None:
     assert [label for _, label, _ in NAVIGATION_ITEMS] == [
-        "تغییر شعبه محوری", "سناریوی چندشعبه‌ای", "تحلیل رتبه هدف",
+        "سناریوی شعبه‌محور", "سناریوی چندشعبه‌ای", "سناریوی رتبه هدف",
     ]
-    assert all(icon.strip() for icon, _, _ in NAVIGATION_ITEMS)
+    assert [icon for icon, _, _ in NAVIGATION_ITEMS] == ["bank", "buildings", "target"]
+    assert all("<svg" in icon_svg(icon) for icon, _, _ in NAVIGATION_ITEMS)
     assert [mode for _, _, mode in NAVIGATION_ITEMS] == [item.scenario_type for item in SCENARIO_DEFINITIONS]
     assert [item.label for item in SCENARIO_DEFINITIONS] == [SCENARIO_TYPE_LABELS[mode] for mode in ScenarioType]
 
@@ -147,7 +161,55 @@ def test_scenario_links_round_trip_to_exact_mode(mode) -> None:
 
 def test_home_and_saved_scenarios_navigation_are_visible_and_clean() -> None:
     assert [label for _, label, _ in UTILITY_NAVIGATION_ITEMS] == ["صفحه اصلی", "سناریوهای ذخیره‌شده"]
+    assert [icon for icon, _, _ in UTILITY_NAVIGATION_ITEMS] == ["home", "folder"]
     assert all("rd_double_arrow_left" not in item for row in UTILITY_NAVIGATION_ITEMS for item in row)
+
+
+def test_sidebar_uses_real_en_bank_logo_asset() -> None:
+    assert EN_BANK_LOGO_RELATIVE_PATH.as_posix() == "assets/logo-1.png"
+    assert EN_BANK_LOGO_PATH == ROOT / EN_BANK_LOGO_RELATIVE_PATH
+    assert EN_BANK_LOGO_PATH.is_file()
+    assert EN_BANK_LOGO_PATH.stat().st_size > 0
+    assert _logo_data_uri().startswith("data:image/png;base64,")
+
+
+def test_sidebar_brand_has_no_synthetic_en_logo_text() -> None:
+    source = (ROOT / "ui" / "navigation.py").read_text(encoding="utf-8")
+    assert "سامانه تحلیل حساسیت شعب" in source
+    assert "درجه‌بندی و تحلیل سناریو" in source
+    assert "logo-1.png" in source
+    assert ">EN<" not in source
+    assert "nav-brand-mark\">EN" not in source
+
+
+def test_legacy_scenario_labels_are_absent() -> None:
+    legacy = {"تغییر شعبه محوری", "تغییر شعبه‌محور", "تحلیل رتبه هدف", "سناریوی چند شعبه‌ای"}
+    current = {label for _, label, _ in NAVIGATION_ITEMS}
+    current |= set(SCENARIO_TYPE_LABELS.values())
+    assert current.isdisjoint(legacy)
+
+
+def test_home_visual_contract_uses_reference_palette_and_no_underlines() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "--primary-navy" in css_source
+    assert "--brand-purple" in css_source
+    assert "--brand-purple-light" in css_source
+    assert ".scenario-nav-link.active" in css_source
+    assert "text-decoration: none !important" in css_source
+    assert ".home-decision-panel" in css_source
+    assert ".home-overview-grid" in css_source
+    assert "home-page-reference.png" not in app_source
+
+
+def test_result_page_action_labels_and_removed_stepper_contract() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    assert '"ذخیره نتیجه"' in source
+    assert '"بازگشت و ویرایش"' in source
+    assert '"بروزرسانی همین سناریو"' in source
+    assert '"ایجاد نسخه کپی"' not in source
+    assert '"سناریوی جدید"' not in source
+    assert '("وضعیت فعلی", "اعمال تغییرات", "اجرای مدل رسمی", "نتیجه سناریو")' not in source
 
 
 def test_preview_html_contains_complete_very_large_values() -> None:

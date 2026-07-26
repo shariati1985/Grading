@@ -9,9 +9,9 @@ from engine.scenario_rule_engine import RuleOperation
 from services.selection_scope import SelectionScope
 
 SCENARIO_TYPE_LABELS = {
-    ScenarioType.FOCUS_BRANCH_ONLY: "تغییر شعبه محوری",
+    ScenarioType.FOCUS_BRANCH_ONLY: "سناریوی شعبه‌محور",
     ScenarioType.MULTI_BRANCH: "سناریوی چندشعبه‌ای",
-    ScenarioType.TARGET_RANK: "تحلیل رتبه هدف",
+    ScenarioType.TARGET_RANK: "سناریوی رتبه هدف",
 }
 
 SCENARIO_DESCRIPTIONS = {
@@ -35,9 +35,9 @@ class ScenarioDefinition:
 SCENARIO_DEFINITIONS = tuple(
     ScenarioDefinition(mode, SCENARIO_TYPE_LABELS[mode], SCENARIO_DESCRIPTIONS[mode], icon, color)
     for mode, icon, color in (
-        (ScenarioType.FOCUS_BRANCH_ONLY, "◈", "purple"),
-        (ScenarioType.MULTI_BRANCH, "◆", "orange"),
-        (ScenarioType.TARGET_RANK, "◎", "green"),
+        (ScenarioType.FOCUS_BRANCH_ONLY, "bank", "purple"),
+        (ScenarioType.MULTI_BRANCH, "buildings", "purple"),
+        (ScenarioType.TARGET_RANK, "target", "purple"),
     )
 )
 
