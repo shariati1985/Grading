@@ -310,15 +310,15 @@ def test_management_overview_cards_have_polished_rtl_typography_and_icons() -> N
     icon_svg_rule = css_source.split(".overview-icon svg {", 1)[1].split("}", 1)[0]
 
     assert 'class="overview-content"' in markup
-    assert 'class="overview-value numeric-ltr" dir="ltr"' in markup
+    assert 'class="overview-value numeric-fa" dir="rtl"' in markup
     assert 'class="overview-label"' in markup
     assert markup.count('class="overview-icon"') == 3
     assert markup.count("<svg") == 3
-    assert "1404-04" in markup
+    assert "۱۴۰۴-۰۴" in markup
     assert "flex-direction: row" in article_rule
     assert "row-reverse" not in article_rule
     assert "direction: rtl" in article_rule
-    assert "justify-content: space-between" in article_rule
+    assert "justify-content: flex-start" in article_rule
     assert "text-align: right" in article_rule
     assert "font-family: var(--font) !important" in article_rule
     assert "align-items: flex-start" in content_rule
@@ -494,10 +494,10 @@ def test_sidebar_profile_card_uses_user_config_binding_and_official_logo() -> No
 
 def test_preview_html_contains_complete_very_large_values() -> None:
     markup = value_comparison_html(4_000_000_000_000.0, 4_500_000_000_000.25)
-    assert "4,000,000,000,000" in markup
-    assert "4,500,000,000,000.25" in markup
-    assert "500,000,000,000.25" in markup
-    assert "numeric-ltr" in markup
+    assert "۴٬۰۰۰٬۰۰۰٬۰۰۰٬۰۰۰" in markup
+    assert "۴٬۵۰۰٬۰۰۰٬۰۰۰٬۰۰۰" in markup
+    assert "۵۰۰٬۰۰۰٬۰۰۰٬۰۰۰" in markup
+    assert "numeric-fa" in markup
 
 
 def test_primary_indicator_card_uses_rank_and_weighted_score_not_normalized_score() -> None:
@@ -522,3 +522,20 @@ def test_summary_is_one_cohesive_managerial_panel() -> None:
     }], 1)
     assert "جمع‌بندی مدیریتی سناریو" in markup
     assert "وضعیت فعلی" in markup and "وضعیت سناریو" in markup and "نتیجه تغییر" in markup
+
+
+def test_step_four_uses_card_first_review_and_detail_sections() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+
+    assert "scenario-review-summary" in source
+    assert "review-change-card" in source
+    assert "review-result-strip" in source
+    assert "calculation-detail-card" in source
+    assert "branch-result-card" in source
+    assert "نمایش داده خام جدولی" in source
+    assert "نمایش جدولی شعب" in source
+    assert "امتیاز موزون" in source
+    assert "سهم وزنی" not in source
+    assert ".calculation-detail-grid" in css_source
+    assert ".branch-result-grid" in css_source

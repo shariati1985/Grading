@@ -121,6 +121,21 @@ def format_rank_change(value: object) -> str:
     return "بدون تغییر"
 
 
+def format_persian_percentage(value: object, decimals: int = 1) -> str:
+    """Format a finite percentage for Persian UI display."""
+    number = _finite_number(value)
+    return "—" if number is None else f"{persian_digits(f'{number:,.{decimals}f}')}٪"
+
+
+def format_signed_persian_number(value: object, decimals: int = 0) -> str:
+    """Format signed display numbers with Persian digits and grouped magnitude."""
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    sign = "+" if number > 0 else ""
+    return persian_digits(f"{sign}{number:,.{decimals}f}")
+
+
 def format_percentage(value: object, decimals: int = 2) -> str:
     """Format a percentage value using the Persian percent sign."""
     number = _finite_number(value)

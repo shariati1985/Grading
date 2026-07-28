@@ -198,12 +198,12 @@ def test_focus_result_presentation_contains_complete_official_baseline_and_scena
     )
     summaries, indicators = focus_result_presentation(comparison)
     assert {item["label"] for item in summaries} == {"رتبه کل شعبه", "امتیاز کل", "درجه شعبه"}
-    assert next(item for item in summaries if item["label"] == "رتبه کل شعبه")["change"] == "15 رتبه بهبود"
-    assert indicators[0]["raw"]["current"] == "4.0 تریلیون"
+    assert next(item for item in summaries if item["label"] == "رتبه کل شعبه")["change"] == "۱۵ رتبه بهبود"
+    assert indicators[0]["raw"]["current"] == "۴٬۰۰۰٬۰۰۰٬۰۰۰٬۰۰۰"
     assert indicators[0]["raw"]["current_exact"] == "4,000,000,000,000"
-    assert indicators[0]["normalized"]["current"] == "500.0 از 1000"
+    assert indicators[0]["normalized"]["current"] == "۵۰۰٫۰ از ۱۰۰۰"
     assert indicators[0]["rank"] == {
-        "current": "45", "scenario": "31", "change": "14 رتبه بهبود", "change_numeric": 14,
+        "current": "۴۵", "scenario": "۳۱", "change": "۱۴ رتبه بهبود", "change_numeric": 14,
     }
     assert indicators[0]["weighted"]["current_numeric"] == pytest.approx(500.0 * WEIGHTS["avg_deposits"])
     assert indicators[0]["weighted"]["scenario_numeric"] == pytest.approx(550.0 * WEIGHTS["avg_deposits"])

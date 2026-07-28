@@ -75,6 +75,14 @@ def _logo_data_uri() -> str | None:
     return f"data:{mime_type};base64,{base64.b64encode(EN_BANK_LOGO_PATH.read_bytes()).decode('ascii')}"
 
 
+def branch_select_label(branch_id: str | None, names: dict[str, str]) -> str:
+    """Render branch select options with Persian-facing branch codes."""
+    if branch_id is None:
+        return "جست‌وجو با نام یا کد شعبه..."
+    shown_code = str(branch_id).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    return f"{names.get(str(branch_id), 'شعبه')} — کد شعبه: {shown_code}"
+
+
 def render_navigation(
     *, active_view: str = HOME_VIEW, active_scenario: ScenarioType | None = None
 ) -> None:

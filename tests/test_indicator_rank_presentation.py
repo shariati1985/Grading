@@ -33,8 +33,8 @@ def _execute(data: pd.DataFrame, branch: str, indicator: str, value: float):
 @pytest.mark.parametrize(
     ("branch", "scenario_value", "expected_current", "expected_scenario", "expected_text"),
     [
-        ("101", 250.0, 3, 2, "1 رتبه بهبود"),
-        ("103", 150.0, 1, 2, "1 رتبه افت"),
+        ("101", 250.0, 3, 2, "۱ رتبه بهبود"),
+        ("103", 150.0, 1, 2, "۱ رتبه افت"),
         ("102", 210.0, 2, 2, "بدون تغییر رتبه"),
     ],
 )
@@ -67,7 +67,7 @@ def test_profit_loss_negative_values_keep_real_official_rank() -> None:
     assert item["baseline_raw_value"] == -300.0
     assert item["scenario_raw_value"] == -150.0
     assert (item["baseline_indicator_rank"], item["scenario_indicator_rank"]) == (3, 2)
-    assert cards[0]["rank"]["change"] == "1 رتبه بهبود"
+    assert cards[0]["rank"]["change"] == "۱ رتبه بهبود"
 
 
 def test_indicator_card_rank_matches_both_official_model_outputs() -> None:

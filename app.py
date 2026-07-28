@@ -20,6 +20,7 @@ from ui.navigation import (
     icon_svg,
     scenario_href,
 )
+from ui.formatters import persian_digits
 from services.factory import create_local_scenario_service
 from services.scenario_workspace_service import PERSISTENCE_STATUS_LABELS, ScenarioWorkspaceService
 from persistence.contracts import ScenarioPersistenceError
@@ -99,12 +100,13 @@ def overview_markup(*, branch_count: int, saved_count: str) -> str:
         '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/>'
         '<path d="M12 7.5V12l3.25 2"/></svg>'
     )
+    period = "1404-04".translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
     return (
         '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
         '<div class="home-overview-grid">'
-        f'<article><div class="overview-content"><b class="overview-value numeric-ltr" dir="ltr">{branch_count:,}</b><small class="overview-label">شعبه فعال در سامانه</small></div><span class="overview-icon">{icon_svg("bank")}</span></article>'
-        f'<article><div class="overview-content"><b class="overview-value numeric-ltr" dir="ltr">{html.escape(saved_count)}</b><small class="overview-label">سناریوی ذخیره‌شده توسط کاربران</small></div><span class="overview-icon">{document_icon}</span></article>'
-        f'<article><div class="overview-content"><b class="overview-value numeric-ltr" dir="ltr">1404-04</b><small class="overview-label">دوره مبنای تحلیل</small></div><span class="overview-icon">{clock_icon}</span></article>'
+        f'<article><span class="overview-icon">{icon_svg("bank")}</span><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{persian_digits(f"{branch_count:,}")}</b><small class="overview-label">شعبه فعال در سامانه</small></div></article>'
+        f'<article><span class="overview-icon">{document_icon}</span><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{html.escape(persian_digits(saved_count))}</b><small class="overview-label">سناریوی ذخیره‌شده توسط کاربران</small></div></article>'
+        f'<article><span class="overview-icon">{clock_icon}</span><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{period}</b><small class="overview-label">دوره مبنای تحلیل</small></div></article>'
         '</div>'
     )
 

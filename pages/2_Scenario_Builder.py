@@ -25,8 +25,8 @@ from ui.components import render_empty_state, render_page_header
 from ui.data_access import load_dashboard_data
 from ui.formatters import (
     format_compact_number, format_editable_number, format_grade, format_percentage,
-    format_persian_number, format_rank, format_raw_input_value, format_raw_value,
-    format_score, parse_formatted_number, parse_raw_input_value, persian_digits,
+    format_persian_number, format_persian_percentage, format_rank, format_raw_input_value, format_raw_value,
+    format_score, format_signed_persian_number, parse_formatted_number, parse_raw_input_value, persian_digits,
 )
 from ui.sensitivity_adapters import (
     action_priority, build_focus_request, build_multi_request, build_target_request,
@@ -50,7 +50,7 @@ from ui.sensitivity_state import (
     set_selected_indicators, switch_scenario_mode,
 )
 from ui.styles import apply_global_styles
-from ui.navigation import activate_requested_scenario, icon_svg
+from ui.navigation import activate_requested_scenario, branch_select_label, icon_svg
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILE = ROOT / "Data.xlsx"
@@ -126,7 +126,7 @@ def _branch_maps(data: pd.DataFrame) -> tuple[list[str], dict[str, str]]:
 
 
 def _branch_label(branch_id: str, names: dict[str, str]) -> str:
-    return f"{names.get(str(branch_id), 'شعبه')} — کد {branch_id}"
+    return branch_select_label(str(branch_id), names)
 
 
 def _scenario_context(draft: dict, names: dict[str, str] | None = None) -> str:
@@ -193,18 +193,18 @@ def _scenario_name_panel(draft: dict, data) -> None:
     )
     with st.container(border=True):
         st.markdown('<div class="scenario-name-panel" data-scenario-name-panel="true">', unsafe_allow_html=True)
-        columns = st.columns([1.15, 1.35, 4.5])
-        if columns[0].button("ذخیره پیش‌نویس", width="stretch"):
-            _save_draft(draft)
-        columns[1].markdown(
-            f'<span class="scenario-save-status"><b aria-hidden="true"></b>{html.escape(status_text)}</span>',
-            unsafe_allow_html=True,
-        )
-        name = columns[2].text_input(
+        columns = st.columns([4.5, 1.35, 1.15])
+        name = columns[0].text_input(
             "نام سناریو",
             value=str(draft.get("scenario_name") or ""),
             key="sensitivity_scenario_name",
         )
+        columns[1].markdown(
+            f'<span class="scenario-save-status"><b aria-hidden="true"></b>{html.escape(status_text)}</span>',
+            unsafe_allow_html=True,
+        )
+        if columns[2].button("ذخیره پیش‌نویس", width="stretch"):
+            _save_draft(draft)
         draft["scenario_name"] = name
         st.markdown('</div>', unsafe_allow_html=True)
     if st.session_state.get("sensitivity_persistence_conflict"):
@@ -271,7 +271,7 @@ def _select_focus(draft, data, outputs, user) -> None:
             index = ids.index(current) + 1 if current in ids else 0
             chosen = st.selectbox(
                 "جست‌وجو و انتخاب شعبه", [None, *ids], index=index,
-                format_func=lambda item: "ابتدا یک شعبه انتخاب کنید" if item is None else _branch_label(item, names),
+                format_func=lambda item: branch_select_label(item, names),
                 key="sensitivity_focus_branch",
                 help="در حالت آزمون مدیریتی، همه شعب فعال قابل انتخاب‌اند.",
             )
@@ -322,11 +322,21 @@ def _indicator_picker(draft, data, outputs) -> None:
     for row_start in range(0, len(INDICATOR_REGISTRY), 4):
         for column, indicator_id in zip(st.columns(4), list(INDICATOR_REGISTRY)[row_start:row_start + 4]):
             definition = INDICATOR_REGISTRY[indicator_id]
+            selected_class = " selected" if indicator_id in selected else ""
             with column, st.container(border=True):
+                st.markdown(
+                    f'<span class="indicator-card-anchor{selected_class}" data-indicator-card="{html.escape(indicator_id)}" data-self-contained-card="true"></span>',
+                    unsafe_allow_html=True,
+                )
                 checked = st.checkbox(definition.display_name, value=indicator_id in selected,
                                       key=f"select_{draft['scenario_type'].value}_{branch_id}_{indicator_id}")
-                st.caption(f"مقدار پایه: {format_raw_value(raw[indicator_id])}")
-                st.caption(f"وزن رسمی: {format_percentage(WEIGHTS[indicator_id] * 100, 0)}")
+                st.markdown(
+                    '<div class="indicator-picker-meta">'
+                    f'<span>مقدار پایه <b class="numeric-fa">{html.escape(format_persian_number(raw[indicator_id], decimals=0))}</b></span>'
+                    f'<span class="weight">وزن رسمی <b class="numeric-fa">{html.escape(format_persian_percentage(WEIGHTS[indicator_id] * 100, 0))}</b></span>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
                 if draft["scenario_type"] is ScenarioType.TARGET_RANK:
                     st.caption(f"نوع: {INDICATOR_TYPE_LABELS.get(INDICATOR_TYPES[indicator_id], 'شاخص مدل')}")
                 if checked and indicator_id not in selected: selected.append(indicator_id)
@@ -343,8 +353,14 @@ def _focus_changes(draft, data) -> None:
         definition = INDICATOR_REGISTRY[indicator_id]
         saved = draft["focus_changes"].get(indicator_id, {})
         with st.container(border=True):
-            st.subheader(definition.display_name)
-            control = st.container(border=True)
+            st.markdown(
+                '<div class="scenario-edit-card" data-scenario-edit-card="true">'
+                f'<header><h3>{html.escape(definition.display_name)}</h3>'
+                f'<span>مقدار پایه: <b class="numeric-fa">{html.escape(format_persian_number(raw[indicator_id], 0))}</b></span></header></div>',
+                unsafe_allow_html=True,
+            )
+            control = st.container()
+            st.markdown('<div class="scenario-edit-controls">', unsafe_allow_html=True)
             columns = control.columns([1.25, 1, 1.35])
             operation = columns[0].selectbox("نوع تغییر", OPERATIONS,
                 index=OPERATIONS.index(RuleOperation(saved.get("operation", RuleOperation.PERCENT_CHANGE.value))),
@@ -372,12 +388,7 @@ def _focus_changes(draft, data) -> None:
                     key=f"focus_value_{indicator_id}_{operation.value}",
                     help="عدد را می‌توانید با جداکننده هزارگان وارد کنید.",
                 )
-            explanations = {
-                RuleOperation.PERCENT_CHANGE: "مقدار جدید = مقدار فعلی × (۱ + درصد تغییر ÷ ۱۰۰). جهت کاهش، درصد از مقدار فعلی کم می‌شود.",
-                RuleOperation.ABSOLUTE_CHANGE: "عدد واردشده، مطابق جهت انتخابی، به مقدار فعلی اضافه یا از آن کسر می‌شود.",
-                RuleOperation.SET_VALUE: "مقدار واردشده جایگزین کامل مقدار فعلی خواهد شد.",
-            }
-            control.caption(explanations[operation])
+            st.markdown('</div>', unsafe_allow_html=True)
             try:
                 entered = (
                     parse_formatted_number(raw_text)
@@ -470,13 +481,51 @@ def _add_override(draft, data) -> None:
 
 def _review(draft, data) -> None:
     ids, names = _branch_maps(data); focus = draft["focus_branch_id"]
-    st.subheader("بازبینی سناریو")
-    st.write(f"شعبه محوری: {_branch_label(focus, names)}")
+    changed_count = len(draft["focus_changes"]) if draft["scenario_type"] is ScenarioType.FOCUS_BRANCH_ONLY else len(draft["bulk_rules"]) + len(draft["manual_overrides"])
+    persistence = dict(draft.get("persistence") or {})
+    status_text = (
+        "پیش‌نویس ذخیره‌شده" if persistence.get("status") == "draft" else
+        "نتیجه ذخیره‌شده" if persistence.get("status") == "executed" else "ذخیره نشده"
+    )
+    st.markdown(
+        '<section class="scenario-review-summary" data-scenario-review="summary">'
+        f'<div class="branch"><span class="review-summary-icon">{icon_svg("bank")}</span><section><small>شعبه انتخاب‌شده</small>'
+        f'<strong>{html.escape(names.get(str(focus), str(focus)))}</strong>'
+        f'<em>کد شعبه: <bdi>{html.escape(persian_digits(focus))}</bdi></em></section></div>'
+        f'<div class="changes"><span class="review-summary-icon">{icon_svg("target")}</span><section><small>تغییرات سناریو</small>'
+        f'<strong class="numeric-fa">{html.escape(persian_digits(changed_count))} شاخص</strong><em>بر پایه تغییرات ثبت‌شده</em></section></div>'
+        f'<div class="scenario"><span class="review-summary-icon">{icon_svg("folder")}</span><section><small>نام سناریو</small>'
+        f'<strong>{html.escape(str(draft.get("scenario_name") or "بدون نام"))}</strong><em>{html.escape(status_text)}</em></section></div>'
+        '</section>',
+        unsafe_allow_html=True,
+    )
     if draft["scenario_type"] is ScenarioType.FOCUS_BRANCH_ONLY:
-        rows = [{"شاخص": INDICATOR_REGISTRY[key].display_name, "مقدار فعلی": format_raw_value(data.loc[data[BRANCH_ID].astype(str).eq(focus), key].iloc[0]),
-                 "نوع تغییر": OPERATION_LABELS[RuleOperation(value["operation"])], "مقدار واردشده": format_raw_value(value["value"]), "مقدار جدید سناریو": format_raw_value(value["preview"])}
-                for key, value in draft["focus_changes"].items()]
-        st.dataframe(rows, width="stretch", hide_index=True)
+        rows = []
+        cards = []
+        for key, value in draft["focus_changes"].items():
+            current = float(data.loc[data[BRANCH_ID].astype(str).eq(focus), key].iloc[0])
+            preview = float(value["preview"])
+            difference = preview - current
+            percent = None if current == 0 else difference / current * 100
+            tone = "success" if difference > 0 else "danger" if difference < 0 else "neutral"
+            rows.append({"شاخص": INDICATOR_REGISTRY[key].display_name, "مقدار فعلی": format_persian_number(current, 0),
+                         "نوع تغییر": OPERATION_LABELS[RuleOperation(value["operation"])], "مقدار واردشده": format_persian_number(value["value"], 0), "مقدار جدید سناریو": format_persian_number(preview, 0),
+                         "تغییر مطلق": format_persian_number(difference, 0), "تغییر درصدی": "—" if percent is None else format_persian_percentage(percent, 1)})
+            cards.append(
+                f'<article class="review-change-card {tone}"><header><h3>{html.escape(INDICATOR_REGISTRY[key].display_name)}</h3>'
+                f'<span class="change-mode-badge">{html.escape(OPERATION_LABELS[RuleOperation(value["operation"])])}: <bdi>{html.escape(format_persian_number(value["value"], 0) if RuleOperation(value["operation"]) is not RuleOperation.PERCENT_CHANGE else format_persian_percentage(value["value"], 1))}</bdi></span></header>'
+                '<div class="review-flow">'
+                f'<div><span>مقدار فعلی</span><strong class="numeric-fa">{html.escape(format_persian_number(current, 0))}</strong></div>'
+                '<b aria-hidden="true">←</b>'
+                f'<div><span>مقدار جدید سناریو</span><strong class="numeric-fa">{html.escape(format_persian_number(preview, 0))}</strong></div></div>'
+                '<div class="review-result-strip">'
+                f'<span class="diff"><b aria-hidden="true">{"↑" if difference > 0 else "↓" if difference < 0 else "•"}</b> تغییر مطلق: <strong class="numeric-fa">{html.escape(format_signed_persian_number(difference, 0))}</strong></span>'
+                f'<span class="diff">تغییر درصدی: <strong class="numeric-fa">{html.escape("—" if percent is None else format_persian_percentage(percent, 1))}</strong></span>'
+                '</div></article>'
+            )
+        st.markdown(f'<section class="review-card-grid">{"".join(cards)}</section>', unsafe_allow_html=True)
+        with st.expander("نمایش جدولی", expanded=False):
+            st.dataframe(rows, width="stretch", hide_index=True)
         st.info("مقادیر خام همه شعب دیگر بدون تغییر باقی می‌ماند.")
     else:
         targeted: set[str] = set()
@@ -530,14 +579,71 @@ def _render_result_actions(draft) -> None:
             return_to_edit(draft); st.rerun()
 
 
+def _branch_result_cards_html(title: str, items, names: dict[str, str]) -> str:
+    cards = []
+    for item in items:
+        rank_tone = "success" if int(item.rank_change) > 0 else "danger" if int(item.rank_change) < 0 else "neutral"
+        score_change = float(item.scenario_final_score) - float(item.baseline_final_score)
+        score_tone = "success" if score_change > 0 else "danger" if score_change < 0 else "neutral"
+        grade_changed = item.baseline_grade != item.scenario_grade
+        rows = (
+            ("target", "رتبه کل", f"رتبه پایه {format_persian_number(item.baseline_rank, 0)}", f"رتبه سناریو {format_persian_number(item.scenario_rank, 0)}", persian_digits(rank_change_presentation(int(item.rank_change))[0]), rank_tone),
+            ("folder", "امتیاز کل", f"امتیاز پایه {format_persian_number(item.baseline_final_score, 1)}", f"امتیاز سناریو {format_persian_number(item.scenario_final_score, 1)}", f"{format_signed_persian_number(score_change, 1)} امتیاز", score_tone),
+            ("bank", "درجه شعبه", f"درجه پایه {format_grade(item.baseline_grade)}", f"درجه سناریو {format_grade(item.scenario_grade)}", "تغییر درجه" if grade_changed else "بدون تغییر درجه", score_tone if grade_changed else "neutral"),
+        )
+        body = "".join(
+            f'<div class="branch-result-row {tone}"><span class="branch-result-icon">{icon_svg(icon)}</span>'
+            f'<section><h4>{html.escape(label)}</h4><div><b>{html.escape(current)}</b><i aria-hidden="true">←</i><b>{html.escape(scenario)}</b></div>'
+            f'<em>{html.escape(change)}</em></section></div>'
+            for icon, label, current, scenario, change, tone in rows
+        )
+        cards.append(
+            '<article class="branch-result-card">'
+            f'<header><strong>{icon_svg("bank")} {html.escape(names.get(str(item.branch_id), str(item.branch_id)))}</strong>'
+            f'<span>کد {html.escape(persian_digits(item.branch_id))}</span></header>{body}</article>'
+        )
+    return f'<section class="branch-result-section"><h3>{html.escape(title)}</h3><div class="branch-result-grid">{"".join(cards)}</div></section>'
+
+
 def _branch_section(title: str, items, data) -> None:
-    st.subheader(title)
     names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].to_dict()
-    st.caption(f"تعداد کل: {len(items):,}")
+    st.caption(f"تعداد کل: {persian_digits(f'{len(items):,}')}")
     if not items: render_empty_state("موردی در این بخش وجود ندارد."); return
-    st.dataframe([{"شعبه": names.get(item.branch_id, item.branch_id), "کد": item.branch_id, "رتبه پایه": item.baseline_rank,
-                   "رتبه سناریو": item.scenario_rank, "تغییر رتبه": item.rank_change, "امتیاز پایه": item.baseline_final_score,
-                   "امتیاز سناریو": item.scenario_final_score, "درجه پایه": format_grade(item.baseline_grade), "درجه سناریو": format_grade(item.scenario_grade)} for item in items], width="stretch", height=360, hide_index=True)
+    rows = [{"شعبه": names.get(item.branch_id, item.branch_id), "کد": persian_digits(item.branch_id), "رتبه پایه": format_persian_number(item.baseline_rank, 0),
+             "رتبه سناریو": format_persian_number(item.scenario_rank, 0), "تغییر رتبه": persian_digits(item.rank_change), "امتیاز پایه": format_persian_number(item.baseline_final_score, 1),
+             "امتیاز سناریو": format_persian_number(item.scenario_final_score, 1), "درجه پایه": format_grade(item.baseline_grade), "درجه سناریو": format_grade(item.scenario_grade)} for item in items]
+    st.markdown(_branch_result_cards_html(title, items, names), unsafe_allow_html=True)
+    with st.expander("نمایش جدولی شعب", expanded=False):
+        st.dataframe(rows, width="stretch", height=360, hide_index=True)
+
+
+def _calculation_detail_cards(detailed: list[dict[str, str]]) -> str:
+    cards = []
+    for row in detailed:
+        absolute_text = str(row["تغییر مطلق"])
+        tone = "danger" if absolute_text.startswith("−") or absolute_text.startswith("-") else "success" if absolute_text.startswith("+") else "neutral"
+        cards.append(
+            f'<article class="calculation-detail-card {tone}"><header><div><h3>{html.escape(row["شاخص"])}</h3>'
+            f'<span>وضعیت: {"دارای تغییر" if tone != "neutral" else "بدون تغییر"}</span></div>'
+            f'<b>وزن واقعی {html.escape(row["وزن واقعی شاخص"])}</b></header>'
+            '<section><h4>داده ورودی</h4><div class="detail-pair">'
+            f'<div><span>مقدار فعلی</span><strong>{html.escape(row["مقدار فعلی"])}</strong></div>'
+            f'<div><span>مقدار سناریو</span><strong>{html.escape(row["مقدار سناریو"])}</strong></div></div></section>'
+            '<section><h4>اثر تغییر</h4><div class="detail-pair">'
+            f'<div><span>تغییر مطلق</span><strong>{html.escape(row["تغییر مطلق"])}</strong></div>'
+            f'<div><span>تغییر درصدی</span><strong>{html.escape(row["تغییر درصدی"])}</strong></div></div></section>'
+            '<section><h4>امتیاز شاخص</h4><div class="detail-triplet">'
+            f'<div><span>امتیاز فعلی</span><strong>{html.escape(row["امتیاز نرمال‌شده فعلی"])}</strong></div>'
+            f'<div><span>امتیاز سناریو</span><strong>{html.escape(row["امتیاز نرمال‌شده سناریو"])}</strong></div>'
+            f'<div><span>تغییر امتیاز</span><strong>{html.escape(row["تغییر امتیاز نرمال‌شده"])}</strong></div></div></section>'
+            '<section><h4>امتیاز موزون</h4><div class="detail-triplet">'
+            f'<div><span>امتیاز موزون فعلی</span><strong>{html.escape(row["امتیاز موزون فعلی"])}</strong></div>'
+            f'<div><span>امتیاز موزون سناریو</span><strong>{html.escape(row["امتیاز موزون سناریو"])}</strong></div>'
+            f'<div><span>اثر بر امتیاز کل</span><strong>{html.escape(row["اثر بر امتیاز کل"])}</strong></div></div></section>'
+            '<details><summary>روش محاسبه</summary><p>امتیاز موزون از امتیاز نرمال‌شده و وزن واقعی شاخص محاسبه و فقط برای نمایش قالب‌بندی شده است.</p></details>'
+            '</article>'
+        )
+    return f'<div class="calculation-detail-grid">{ "".join(cards) }</div>'
 
 
 def _focus_result_page(draft, data, result, comparison) -> None:
@@ -549,20 +655,22 @@ def _focus_result_page(draft, data, result, comparison) -> None:
     with st.expander("جزئیات کامل محاسبات", expanded=False):
         detailed = [{
             "شاخص": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
-            "مقدار فعلی": format_compact_number(item["baseline_raw_value"]),
-            "مقدار سناریو": format_compact_number(item["scenario_raw_value"]),
-            "تغییر مطلق": format_compact_number(item["raw_value_change"]),
-            "تغییر درصدی": format_percentage(item["raw_value_change_pct"]),
-            "امتیاز نرمال‌شده فعلی": format_score(item["baseline_score"]),
-            "امتیاز نرمال‌شده سناریو": format_score(item["scenario_score"]),
-            "تغییر امتیاز نرمال‌شده": format_score(float(item["scenario_score"]) - float(item["baseline_score"])),
+            "مقدار فعلی": format_persian_number(item["baseline_raw_value"], 0),
+            "مقدار سناریو": format_persian_number(item["scenario_raw_value"], 0),
+            "تغییر مطلق": format_signed_persian_number(item["raw_value_change"], 0),
+            "تغییر درصدی": format_persian_percentage(item["raw_value_change_pct"], 1),
+            "امتیاز نرمال‌شده فعلی": format_persian_number(item["baseline_score"], 1),
+            "امتیاز نرمال‌شده سناریو": format_persian_number(item["scenario_score"], 1),
+            "تغییر امتیاز نرمال‌شده": format_signed_persian_number(float(item["scenario_score"]) - float(item["baseline_score"]), 1),
             "فرمول امتیاز موزون": "امتیاز نرمال‌شده × وزن واقعی شاخص",
-            "وزن واقعی شاخص": format_percentage(WEIGHTS[item["indicator_key"]] * 100),
-            "امتیاز موزون فعلی": format_score(float(item["baseline_score"]) * WEIGHTS[item["indicator_key"]]),
-            "امتیاز موزون سناریو": format_score(float(item["scenario_score"]) * WEIGHTS[item["indicator_key"]]),
-            "اثر بر امتیاز کل": format_score((float(item["scenario_score"]) - float(item["baseline_score"])) * WEIGHTS[item["indicator_key"]]),
+            "وزن واقعی شاخص": format_persian_percentage(WEIGHTS[item["indicator_key"]] * 100, 1),
+            "امتیاز موزون فعلی": format_persian_number(float(item["baseline_score"]) * WEIGHTS[item["indicator_key"]], 1),
+            "امتیاز موزون سناریو": format_persian_number(float(item["scenario_score"]) * WEIGHTS[item["indicator_key"]], 1),
+            "اثر بر امتیاز کل": format_signed_persian_number((float(item["scenario_score"]) - float(item["baseline_score"])) * WEIGHTS[item["indicator_key"]], 1),
         } for item in comparison.indicator_comparisons]
-        st.dataframe(detailed, width="stretch", height=360, hide_index=True)
+        st.markdown(_calculation_detail_cards(detailed), unsafe_allow_html=True)
+        with st.expander("نمایش داده خام جدولی", expanded=False):
+            st.dataframe(detailed, width="stretch", height=360, hide_index=True)
         if any(item["indicator_key"] == "profit_loss" for item in comparison.indicator_comparisons):
             st.info("امتیاز نرمال‌شده سود و زیان براساس دامنه مقادیر مدل و قواعد تبدیل مقادیر منفی محاسبه می‌شود؛ بنابراین برای تفسیر مدیریتی، مقدار واقعی، رتبه شاخص و امتیاز موزون مبنای اصلی نمایش قرار گرفته‌اند.")
         _branch_section("شعب دارای تغییر در داده‌ها", result.modified_branches, data)
@@ -725,10 +833,10 @@ def _target_full_result(solution) -> None:
 
 def _navigation(draft) -> None:
     st.markdown('<div class="builder-action-row" data-builder-actions="true"></div>', unsafe_allow_html=True)
-    columns = st.columns([1.35, 5.55, 1.35])
+    columns = st.columns([1.35, 1.35, 5.55])
     if columns[0].button("مرحله بعد", disabled=draft["current_step"] >= 4, type="primary", width="stretch"):
         draft["current_step"] += 1; st.rerun()
-    if columns[2].button("مرحله قبل", disabled=draft["current_step"] <= 1, width="stretch"):
+    if columns[1].button("مرحله قبل", disabled=draft["current_step"] <= 1, width="stretch"):
         draft["current_step"] -= 1; st.rerun()
 
 

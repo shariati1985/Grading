@@ -9,7 +9,7 @@ import streamlit as st
 from ui.navigation import scenario_href
 from ui.navigation import icon_svg
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS
-from ui.formatters import format_compact_number, format_percentage, persian_digits
+from ui.formatters import format_persian_number, format_persian_percentage, persian_digits
 
 
 def render_scenario_cards() -> None:
@@ -31,15 +31,15 @@ def value_comparison_html(current: float, scenario: float) -> str:
     difference = float(scenario) - float(current)
     percent = None if float(current) == 0 else difference / float(current) * 100.0
     values = (
-        ("مقدار فعلی", format_compact_number(current)),
-        ("مقدار جدید سناریو", format_compact_number(scenario)),
-        ("تفاوت مطلق", format_compact_number(difference)),
-        ("تفاوت درصدی", "تعریف‌نشده برای مبنای صفر" if percent is None else format_percentage(percent)),
+        ("مقدار فعلی", format_persian_number(current, decimals=0), "neutral"),
+        ("مقدار جدید سناریو", format_persian_number(scenario, decimals=0), "scenario"),
+        ("تفاوت مطلق", format_persian_number(difference, decimals=0), "success" if difference > 0 else "danger" if difference < 0 else "neutral"),
+        ("تفاوت درصدی", "تعریف‌نشده برای مبنای صفر" if percent is None else format_persian_percentage(percent, decimals=1), "success" if difference > 0 else "danger" if difference < 0 else "neutral"),
     )
     cells = "".join(
-        f'<div class="value-comparison-item"><span>{html.escape(label)}</span>'
-        f'<strong class="numeric-ltr">{html.escape(value)}</strong></div>'
-        for label, value in values
+        f'<div class="value-comparison-item {tone}"><span>{html.escape(label)}</span>'
+        f'<strong class="numeric-fa" dir="rtl">{html.escape(value)}</strong></div>'
+        for label, value, tone in values
     )
     return f'<div class="value-comparison-card">{cells}</div>'
 
@@ -49,18 +49,20 @@ def render_value_comparison(current: float, scenario: float) -> None:
 
 
 def summary_cards_html(items: list[dict[str, str]], changed_count: int = 0) -> str:
+    icons = ("target", "folder", "bank")
     cards = "".join(
         f'<section class="comparison-strip-item {html.escape(item.get("tone", "neutral"))}">'
-        f'<h3>{html.escape(item["label"])}</h3><div class="comparison-values">'
-        f'<div><span>وضعیت فعلی</span><strong class="numeric-ltr" dir="ltr">{html.escape(item["current"])}</strong></div>'
-        f'<div><span>وضعیت سناریو</span><strong class="numeric-ltr" dir="ltr">{html.escape(item["scenario"])}</strong></div></div>'
-        f'<p><span>نتیجه تغییر</span>{html.escape(item["change"])}</p></section>'
-        for item in items
+        f'<header><span class="summary-metric-icon">{icon_svg(icons[index % len(icons)])}</span><h3>{html.escape(item["label"])}</h3></header>'
+        '<div class="comparison-values">'
+        f'<div><span>وضعیت فعلی</span><strong class="numeric-fa" dir="rtl">{html.escape(item["current"])}</strong></div>'
+        f'<div><span>وضعیت سناریو</span><strong class="numeric-fa" dir="rtl">{html.escape(item["scenario"])}</strong></div></div>'
+        f'<p><b aria-hidden="true">↗</b><span>نتیجه تغییر: {html.escape(item["change"])}</span></p></section>'
+        for index, item in enumerate(items)
     )
     return (
         '<div class="comparison-strip-header"><div><strong>جمع‌بندی مدیریتی سناریو</strong>'
         '<small>مقایسه وضعیت فعلی با نتیجه اجرای مدل رسمی</small></div>'
-        f'<span>{changed_count:,} شاخص تغییریافته</span></div>'
+        f'<span>{persian_digits(f"{changed_count:,}")} شاخص تغییریافته</span></div>'
         f'<div class="comparison-strip">{cards}</div>'
     )
 
