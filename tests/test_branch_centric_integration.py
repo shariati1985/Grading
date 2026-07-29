@@ -88,7 +88,9 @@ def test_branch_centric_result_page_renders_rank_cards_without_internal_icon_tex
     at.run()
     assert not at.exception
     visible = " ".join(item.value for item in at.markdown)
-    assert "جمع‌بندی مدیریتی سناریو" in visible
-    assert "رتبه فعلی شعبه در شاخص" in visible
+    assert "نتیجه در یک نگاه" in visible
+    assert "جزئیات کامل محاسبات" in visible
+    assert "امتیاز موزون فعلی" in visible
+    assert "شعب متأثر در رتبه‌بندی" in visible
     assert "keyboard_ar" not in visible
     assert "rd_double_arrow_left" not in visible

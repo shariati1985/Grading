@@ -9,7 +9,10 @@ import streamlit as st
 from ui.navigation import scenario_href
 from ui.navigation import icon_svg
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS
-from ui.formatters import format_persian_number, format_persian_percentage, persian_digits
+from ui.formatters import (
+    format_persian_number, format_persian_percentage,
+    format_signed_persian_number, format_signed_persian_percentage, persian_digits,
+)
 
 
 def render_scenario_cards() -> None:
@@ -30,18 +33,28 @@ def value_comparison_html(current: float, scenario: float) -> str:
     """Responsive, non-truncating raw-value comparison for one indicator."""
     difference = float(scenario) - float(current)
     percent = None if float(current) == 0 else difference / float(current) * 100.0
+    tone = "success" if difference > 0 else "danger" if difference < 0 else "neutral"
+    direction_text = "افزایش" if difference > 0 else "کاهش" if difference < 0 else "بدون تغییر"
+    direction_icon = "↗" if difference > 0 else "↘" if difference < 0 else "−"
     values = (
-        ("مقدار فعلی", format_persian_number(current, decimals=0), "neutral"),
-        ("مقدار جدید سناریو", format_persian_number(scenario, decimals=0), "scenario"),
-        ("تفاوت مطلق", format_persian_number(difference, decimals=0), "success" if difference > 0 else "danger" if difference < 0 else "neutral"),
-        ("تفاوت درصدی", "تعریف‌نشده برای مبنای صفر" if percent is None else format_persian_percentage(percent, decimals=1), "success" if difference > 0 else "danger" if difference < 0 else "neutral"),
+        ("مقدار فعلی", format_persian_number(current, decimals=0), "current", ""),
+        ("مقدار سناریو", format_persian_number(scenario, decimals=0), "scenario", ""),
+        ("تفاوت مطلق", format_signed_persian_number(difference, decimals=0), tone, direction_icon),
+        ("تفاوت درصدی", "تعریف‌نشده برای مبنای صفر" if percent is None else format_signed_persian_percentage(percent, decimals=1), tone, direction_icon),
     )
-    cells = "".join(
-        f'<div class="value-comparison-item {tone}"><span>{html.escape(label)}</span>'
-        f'<strong class="numeric-fa" dir="rtl">{html.escape(value)}</strong></div>'
-        for label, value, tone in values
+    cells = ""
+    for label, value, tone, icon in values:
+        icon_markup = f'<b aria-hidden="true">{html.escape(icon)}</b>' if icon else ""
+        cells += (
+            f'<div class="value-comparison-item {tone}"><span>{html.escape(label)}</span>'
+            f'{icon_markup}<strong class="numeric-fa" dir="rtl">{html.escape(value)}</strong></div>'
+        )
+    return (
+        f'<div class="value-comparison-card" data-value-comparison="true">{cells}</div>'
+        f'<div class="change-result-strip {tone}"><b aria-hidden="true">{direction_icon}</b>'
+        f'<span>{direction_text}</span><strong class="numeric-fa" dir="rtl">'
+        f'{html.escape(format_signed_persian_number(difference, decimals=0))}</strong></div>'
     )
-    return f'<div class="value-comparison-card">{cells}</div>'
 
 
 def render_value_comparison(current: float, scenario: float) -> None:

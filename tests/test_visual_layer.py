@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +42,30 @@ from ui.scenario_workflow import INDICATOR_LABELS, INDICATOR_ORDER
 from app import home_markup, overview_markup
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _BalanceParser(HTMLParser):
+    VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag not in self.VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        assert self.stack, f"unexpected closing tag {tag}"
+        current = self.stack.pop()
+        assert current == tag, f"expected closing {current}, got {tag}"
+
+
+def _assert_balanced_html(fragment: str) -> None:
+    parser = _BalanceParser()
+    parser.feed(fragment)
+    parser.close()
+    assert parser.stack == []
 
 
 def _indicator_comparison() -> pd.DataFrame:
@@ -500,6 +525,97 @@ def test_preview_html_contains_complete_very_large_values() -> None:
     assert "numeric-fa" in markup
 
 
+def test_change_definition_step_uses_bound_branch_cards_and_existing_widget_keys() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+
+    assert "data-change-step-header" in source
+    assert "_selected_branch_banner(branch_id, names)" in source
+    assert "names.get(str(branch_id)" in source
+    assert "persian_digits(branch_id)" in source
+    assert "data-self-contained-card=\"true\"" in source
+    assert "definition.display_name" in source
+    assert "format_persian_number(current, 0)" in source
+    assert "key=f\"focus_op_{indicator_id}\"" in source
+    assert "key=f\"focus_direction_{indicator_id}_{operation.value}\"" in source
+    assert "key=f\"focus_value_{indicator_id}_{operation.value}\"" in source
+    assert "preview_raw_operation(raw[indicator_id], operation, value, indicator_id)" in source
+    assert 'draft["focus_changes"][indicator_id]' in source
+    assert "درصد تغییر" in source and "تغییر مطلق" in source and "مقدار نهایی" in source
+
+    assert ".change-step-header" in css_source
+    assert ".selected-branch-code" in css_source
+    assert ".indicator-edit-title" in css_source
+    assert ".value-comparison-card" in css_source
+    assert ".value-comparison-item.current" in css_source
+    assert ".value-comparison-item.scenario" in css_source
+    assert ".value-comparison-item.success" in css_source
+    assert ".value-comparison-item.danger" in css_source
+    assert "[data-baseweb=\"popover\"]" in css_source
+
+
+def test_value_comparison_formats_signed_persian_results_without_mutating_sources() -> None:
+    positive = value_comparison_html(1000, 1200)
+    negative = value_comparison_html(1000, 900)
+    neutral = value_comparison_html(1000, 1000)
+
+    assert "+۲۰۰" in positive
+    assert "+۲۰٫۰٪" in positive
+    assert "−۱۰۰" in negative
+    assert "−۱۰٫۰٪" in negative
+    assert "۰٫۰٪" in neutral
+    assert "مقدار سناریو" in positive
+    assert "مقدار جدید سناریو" not in positive
+
+
+def test_result_context_strip_keeps_only_branch_name_code_scenario_name_and_changed_count() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    body = source.split("def _result_context_html", 1)[1].split("def _result_header_html", 1)[0]
+
+    assert 'class="results-context-icon"' in body
+    assert "names.get(branch_id, branch_id)" in body
+    assert "persian_digits(branch_id)" in body
+    assert "نام سناریو:" in body
+    assert "شاخص تغییریافته" in body
+    assert "شاخص انتخاب‌شده" not in body
+    assert "SCENARIO_TYPE_LABELS[result.request.scenario_type])}</span>" not in body
+
+
+def test_rank_filter_uses_complete_numeric_comparison_and_stable_status_keys() -> None:
+    import importlib.util
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    module_path = ROOT / "pages" / "2_Scenario_Builder.py"
+    spec = importlib.util.spec_from_file_location("scenario_builder_for_rank_tests", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    rows = pd.DataFrame([
+        {"branch_id": "190", "baseline_rank": 108, "scenario_rank": 89, "baseline_score": 1.0, "scenario_score": 2.0, "score_change": 1.0},
+        {"branch_id": "191", "baseline_rank": 89, "scenario_rank": 90, "baseline_score": 2.0, "scenario_score": 1.0, "score_change": -1.0},
+        {"branch_id": "192", "baseline_rank": 50, "scenario_rank": 50, "baseline_score": 3.0, "scenario_score": 3.0, "score_change": 0.0},
+        {"branch_id": "193", "baseline_rank": None, "scenario_rank": 50, "baseline_score": 3.0, "scenario_score": 3.0, "score_change": 0.0},
+    ])
+    result = SimpleNamespace(comparison_results=SimpleNamespace(branch_comparison=rows))
+    rank_rows = module._complete_rank_rows(result, {"190": "آزادی-دکتر قریب", "191": "نزولی", "192": "ثابت"}, "190")
+
+    assert [row["branch_id"] for row in rank_rows].count("190") == 1
+    assert next(row for row in rank_rows if row["branch_id"] == "190")["status_key"] == "up"
+    assert next(row for row in rank_rows if row["branch_id"] == "191")["status_key"] == "down"
+    assert next(row for row in rank_rows if row["branch_id"] == "192")["status_key"] == "unchanged"
+    assert "193" not in {row["branch_id"] for row in rank_rows}
+    assert module._rank_counter(rank_rows, "up") + module._rank_counter(rank_rows, "down") + module._rank_counter(rank_rows, "unchanged") == len(rank_rows)
+    assert len(module._filter_rank_rows(rank_rows, "all", "")) == 3
+    assert [row["branch_id"] for row in module._filter_rank_rows(rank_rows, "up", "")] == ["190"]
+    assert [row["branch_id"] for row in module._filter_rank_rows(rank_rows, "down", "")] == ["191"]
+    assert [row["branch_id"] for row in module._filter_rank_rows(rank_rows, "unchanged", "")] == ["192"]
+    assert [row["branch_id"] for row in module._filter_rank_rows(rank_rows, "up", "۱۹۰")] == ["190"]
+    assert module._filter_rank_rows(rank_rows, "up", "ناموجود") == []
+
+
 def test_primary_indicator_card_uses_rank_and_weighted_score_not_normalized_score() -> None:
     markup = indicator_cards_html([{
         "name": "سود و زیان", "icon": "±", "weight": "3%", "tone": "success",
@@ -531,11 +647,99 @@ def test_step_four_uses_card_first_review_and_detail_sections() -> None:
     assert "scenario-review-summary" in source
     assert "review-change-card" in source
     assert "review-result-strip" in source
-    assert "calculation-detail-card" in source
-    assert "branch-result-card" in source
-    assert "نمایش داده خام جدولی" in source
-    assert "نمایش جدولی شعب" in source
+    assert "results-workspace-header" in source
+    assert "results-context-strip" in source
+    assert "نتیجه اجرای سناریوی شعبه‌محور" in source
+    assert "نتیجه در یک نگاه" in source
+    assert "جزئیات محاسبات" in source
+    assert "شاخص‌های تغییریافته" in source
+    assert "شعب متأثر در رتبه‌بندی" in source
+    assert "شعب دارای تغییر در داده‌ها" in source
+    assert "data-default-results-tab=\"calculation-details\"" in source
     assert "امتیاز موزون" in source
     assert "سهم وزنی" not in source
-    assert ".calculation-detail-grid" in css_source
-    assert ".branch-result-grid" in css_source
+    assert ".calculation-table" in css_source
+    assert ".branch-impact-table" in css_source
+    assert ".results-action-bar" in css_source
+    assert "[data-testid=\"stTabs\"] [role=\"tablist\"]" in css_source
+
+
+def test_branch_result_summary_uses_bounded_scoped_markup_and_balanced_html() -> None:
+    import importlib.util
+    from types import SimpleNamespace
+
+    module_path = ROOT / "pages" / "2_Scenario_Builder.py"
+    spec = importlib.util.spec_from_file_location("scenario_builder_for_result_markup_tests", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    comparison = SimpleNamespace(
+        rank_change=1,
+        score_change=12.5,
+        baseline_rank=4,
+        scenario_rank=3,
+        baseline_final_score=700.0,
+        scenario_final_score=712.5,
+        baseline_grade="2",
+        scenario_grade="1",
+        indicator_comparisons=[{}, {}],
+    )
+    markup = module._managerial_summary_html(comparison, 1)
+
+    for label in ("رتبه شعبه", "امتیاز کل", "درجه شعبه", "شاخص‌های مؤثر"):
+        assert label in markup
+    assert markup.count('class="result-glance-card') == 4
+    assert "result-trend-icon" in markup
+    assert "result-change-pill" in markup
+    assert "رتبه فعلی" in markup and "رتبه سناریو" in markup
+    assert "امتیاز کل فعلی" in markup and "امتیاز کل سناریو" in markup
+    assert "<svg" not in markup and "<path" not in markup
+    _assert_balanced_html(markup)
+
+
+def test_branch_result_detail_toggle_suppresses_native_triangle_marker() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    table_body = source.split("def _calculation_table_html", 1)[1].split("def _changed_indicators_html", 1)[0]
+
+    assert '<details class="result-calc-details">' in table_body
+    assert 'summary class="calc-detail-toggle"' in table_body
+    assert '<span class="calc-detail-chevron" aria-hidden="true">⌄</span></summary>' in table_body
+    assert ".result-calc-details > summary.calc-detail-toggle" in css_source
+    assert "summary.calc-detail-toggle::-webkit-details-marker" in css_source
+    assert "summary.calc-detail-toggle::marker" in css_source
+    assert "list-style: none" in css_source
+    assert "list-style-type: none" in css_source
+    assert ".calc-detail-chevron" in css_source
+    toggle_css = css_source.split(".result-calc-details > summary.calc-detail-toggle", 1)[1].split(".calc-detail-panel", 1)[0]
+    assert "display: block" in toggle_css
+    assert "display: none" in toggle_css
+    assert "max-width: 34px" in toggle_css
+    assert "max-height: 30px" in toggle_css
+    assert "transparent" not in toggle_css
+
+
+def test_branch_result_css_does_not_use_broad_svg_path_or_triangle_rules() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    result_css = css_source.split(".results-workspace-header", 1)[1].split("@media (max-width: 1100px)", 1)[0]
+
+    assert "\n        svg " not in result_css
+    assert "\n        path " not in result_css
+    assert "clip-path" not in result_css
+    assert "border-left: 999" not in result_css
+    assert "border-right: 999" not in result_css
+    assert ".result-trend-icon {" in result_css
+    assert "width: 26px" in result_css
+    assert "height: 26px" in result_css
+
+
+def test_focus_result_renderer_uses_html_for_result_fragments_and_no_multi_controls() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    body = source.split("def _focus_result_page", 1)[1].split("def _result_page", 1)[0]
+
+    assert "st.markdown(_result_header_html(draft), unsafe_allow_html=True)" in body
+    assert "st.markdown(_result_context_html(draft, result, comparison, names), unsafe_allow_html=True)" in body
+    assert "st.markdown(_managerial_summary_html(comparison, len(changed_rows)), unsafe_allow_html=True)" in body
+    assert "قواعد عمومی شعب مشمول" not in body
+    assert "شعبه اصلی سناریو" not in body

@@ -127,6 +127,15 @@ def format_persian_percentage(value: object, decimals: int = 1) -> str:
     return "—" if number is None else f"{persian_digits(f'{number:,.{decimals}f}')}٪"
 
 
+def format_signed_persian_percentage(value: object, decimals: int = 1) -> str:
+    """Format signed display percentages with Persian digits and percent sign."""
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    sign = "+" if number > 0 else ""
+    return f"{persian_digits(f'{sign}{number:,.{decimals}f}')}٪"
+
+
 def format_signed_persian_number(value: object, decimals: int = 0) -> str:
     """Format signed display numbers with Persian digits and grouped magnitude."""
     number = _finite_number(value)
