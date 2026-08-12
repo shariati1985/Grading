@@ -52,6 +52,7 @@ from ui.sensitivity_state import (
 )
 from ui.styles import apply_global_styles
 from ui.navigation import activate_requested_scenario, branch_select_label, icon_svg
+from ui.multi_branch_page import render_multi_branch_workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILE = ROOT / "Data.xlsx"
@@ -1301,6 +1302,9 @@ def main() -> None:
     try: user = load_current_user(ROOT / "config/local_user.json")
     except (FileNotFoundError, ValueError, OSError): st.error("اطلاعات کاربر در دسترس نیست."); return
     mode = draft["scenario_type"]
+    if mode is ScenarioType.MULTI_BRANCH:
+        render_multi_branch_workspace(data, outputs, user)
+        return
     _scenario_page_header(mode)
     if mode is ScenarioType.FOCUS_BRANCH_ONLY:
         if draft.get("entry_source") == "saved":

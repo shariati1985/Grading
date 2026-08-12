@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from streamlit.testing.v1 import AppTest
 
 from domain.scenario_contracts import ScenarioType
@@ -14,6 +16,10 @@ from ui.sensitivity_adapters import build_focus_request, focus_result_presentati
 from ui.sensitivity_state import new_scenario_draft
 
 
+ROOT = Path(__file__).resolve().parents[1]
+SCENARIO_BUILDER = ROOT / "pages" / "2_Scenario_Builder.py"
+
+
 def _workspace(path):
     user = CurrentUser("integration.user", "کاربر آزمون", ("admin",))
     return ScenarioWorkspaceService(
@@ -22,7 +28,7 @@ def _workspace(path):
 
 
 def test_new_branch_centric_form_does_not_force_local_assigned_branch() -> None:
-    at = AppTest.from_file("pages/2_Scenario_Builder.py", default_timeout=30)
+    at = AppTest.from_file(SCENARIO_BUILDER, default_timeout=30)
     at.session_state["sensitivity_draft"] = new_scenario_draft(ScenarioType.FOCUS_BRANCH_ONLY)
     at.session_state["sensitivity_session_history"] = []
     at.run()
@@ -82,7 +88,7 @@ def test_branch_centric_result_page_renders_rank_cards_without_internal_icon_tex
     )
     draft["execution_result"] = ScenarioExecutionService().execute(build_focus_request(draft), input_df)
     draft["show_result"] = True
-    at = AppTest.from_file("pages/2_Scenario_Builder.py", default_timeout=30)
+    at = AppTest.from_file(SCENARIO_BUILDER, default_timeout=30)
     at.session_state["sensitivity_draft"] = draft
     at.session_state["sensitivity_session_history"] = []
     at.run()

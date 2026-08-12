@@ -132,6 +132,37 @@ def apply_global_styles(
             padding: 6px; background: #fff; border-radius: 9px; }
         .bank-logo-slot img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
+        .multi-branch-page { container-type: inline-size; }
+        .multi-branch-workflow { margin: 18px 0 24px; overflow-x: auto; }
+        .multi-branch-workflow ol { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr));
+            gap: 8px; min-width: 780px; padding: 0; margin: 0; list-style: none; }
+        .multi-branch-workflow li { display: flex; align-items: center; gap: 9px; min-height: 54px;
+            padding: 9px 12px; color: var(--muted); background: var(--neutral-50);
+            border: 1px solid var(--border); border-radius: var(--radius); }
+        .multi-branch-workflow li b { display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; flex: 0 0 28px; border-radius: 999px; background: var(--neutral-200); }
+        .multi-branch-workflow li.active { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+        .multi-branch-workflow li.active b { color: #fff; background: var(--accent); }
+        .multi-branch-workflow li.completed b { color: #fff; background: var(--success); }
+        .multi-branch-stage-header { display: flex; align-items: center; gap: 13px; margin: 8px 0 18px; }
+        .multi-branch-stage-header > span { display: inline-flex; align-items: center; justify-content: center;
+            width: 48px; height: 48px; flex: 0 0 48px; color: var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
+        .multi-branch-stage-header svg { width: 25px; height: 25px; fill: none; stroke: currentColor;
+            stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+        .multi-branch-stage-header h2, .multi-branch-stage-header p { margin: 0 !important; }
+        .multi-branch-stage-header p { color: var(--muted); }
+        .multi-branch-empty { padding: 20px; margin: 10px 0; color: var(--muted); text-align: center;
+            background: var(--neutral-50); border: 1px dashed var(--border); border-radius: var(--radius); }
+        .multi-network-summary, .multi-primary-result { margin: 24px 0 10px; font-family: var(--font) !important; }
+        .multi-network-summary h2, .multi-primary-result h2 { margin: 0 !important; color: var(--primary);
+            font-size: 20px !important; font-weight: 800 !important; }
+        .multi-primary-result { padding: 15px 18px; background: var(--accent-soft);
+            border: 1px solid #e1d5ea; border-right: 4px solid var(--accent); border-radius: var(--radius); }
+        .multi-primary-result header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .multi-primary-result p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+        .multi-branch-page [data-testid="stDataFrame"] { direction: rtl; border: 1px solid var(--border);
+            border-radius: var(--radius); box-shadow: var(--shadow-soft); overflow: hidden; }
+
         /* Keep Streamlit's native sidebar layout so its reserved space remains
            correct under browser zoom and viewport resizing. */
         [data-testid="stSidebar"] {
