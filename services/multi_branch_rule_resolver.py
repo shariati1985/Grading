@@ -167,7 +167,7 @@ class MultiBranchRuleResolver:
             if rule.indicator_key in seen:
                 issues.append(f"DUPLICATE_RULE:{scope}:{rule.indicator_key}")
             seen.add(rule.indicator_key)
-            if not cls._finite(rule.percentage) or rule.percentage < 0:
+            if not cls._finite(rule.percentage) or rule.percentage <= 0:
                 issues.append(f"INVALID_PERCENTAGE:{scope}:{rule.indicator_key}")
 
     @staticmethod

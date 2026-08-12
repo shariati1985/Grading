@@ -22,7 +22,7 @@ from services.multi_branch_workspace_service import MultiBranchWorkspaceService
 from services.scenario_workspace_service import ScenarioWorkspaceService
 from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
 from ui import initialize_session_state
-from ui.components import render_empty_state, render_page_header
+from ui.components import render_empty_state
 from ui.data_access import load_dashboard_data
 from ui.formatters import (
     format_compact_number, format_editable_number, format_grade, format_percentage,
@@ -49,7 +49,7 @@ from ui.sensitivity_state import (
     SESSION_HISTORY_KEY, SENSITIVITY_DRAFT_KEY,
     delete_bulk_rule, delete_manual_override,
     return_to_edit, set_focus_branch, set_multi_branch_selection,
-    set_selected_indicators, switch_scenario_mode,
+    set_selected_indicators,
 )
 from ui.styles import apply_global_styles
 from ui.navigation import activate_requested_scenario, branch_select_label, icon_svg
@@ -1298,10 +1298,7 @@ def main() -> None:
     draft = st.session_state[SENSITIVITY_DRAFT_KEY]
     apply_global_styles(active_scenario=draft.get("scenario_type"))
     if draft.get("scenario_type") is None:
-        render_page_header("فضای تحلیل حساسیت", "برای شروع، نوع سناریو را انتخاب کنید.")
-        for column, mode in zip(st.columns(3), ScenarioType):
-            if column.button(SCENARIO_TYPE_LABELS[mode], key=f"choose_{mode.value}", width="stretch"):
-                switch_scenario_mode(st.session_state, mode); st.rerun()
+        st.switch_page("app.py")
         return
     try: data, outputs = load_baseline()
     except (FileNotFoundError, ValueError, OSError): st.error("اطلاعات مبنا بارگذاری نشد."); return

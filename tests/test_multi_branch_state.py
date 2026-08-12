@@ -1,3 +1,5 @@
+import pytest
+
 from domain.scenario_contracts import ScenarioType
 from ui.multi_branch_state import (
     MULTI_BRANCH_STAGE_LABELS,
@@ -12,6 +14,7 @@ from ui.multi_branch_state import (
 )
 from ui.sensitivity_state import start_new_scenario
 from ui.sensitivity_state import SENSITIVITY_DRAFT_KEY, new_scenario_draft
+from ui.multi_branch_page import _parse_percentage_input
 
 
 def test_multi_branch_state_is_isolated_from_frozen_branch_centric_draft() -> None:
@@ -26,6 +29,12 @@ def test_multi_branch_state_is_isolated_from_frozen_branch_centric_draft() -> No
     assert state[SENSITIVITY_DRAFT_KEY] is branch_draft
     assert state[SENSITIVITY_DRAFT_KEY]["focus_branch_id"] == "101"
     assert state[MULTI_BRANCH_STATE_KEY]["primary_branch_code"] is None
+
+
+def test_new_multi_branch_workspace_has_no_forced_primary_branch_default() -> None:
+    workspace = new_multi_branch_workspace()
+
+    assert workspace["primary_branch_code"] is None
 
 
 def test_multi_branch_entry_order_is_fixed() -> None:
@@ -68,3 +77,16 @@ def test_starting_new_multi_branch_scenario_discards_previous_workspace() -> Non
     state = {MULTI_BRANCH_STATE_KEY: {"scenario_name": "قبلی"}}
     start_new_scenario(state, ScenarioType.MULTI_BRANCH)
     assert MULTI_BRANCH_STATE_KEY not in state
+
+
+def test_percentage_parser_accepts_latin_persian_and_decimal_values() -> None:
+    assert _parse_percentage_input("25") == 25.0
+    assert _parse_percentage_input("۲۵") == 25.0
+    assert _parse_percentage_input("12.5") == 12.5
+    assert _parse_percentage_input("۱۲٫۵") == 12.5
+
+
+@pytest.mark.parametrize("value", ["", "0", "۰", "-1", "abc", "1..2", float("nan"), float("inf")])
+def test_percentage_parser_rejects_blank_zero_negative_and_invalid_values(value) -> None:
+    with pytest.raises(ValueError):
+        _parse_percentage_input(value)

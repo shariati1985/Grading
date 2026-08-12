@@ -324,6 +324,34 @@ def test_home_markup_excludes_saved_scenario_list_but_keeps_aggregate_metric() -
     assert "مشاهده نتیجه" not in markup
 
 
+def test_scenario_builder_without_selected_mode_returns_to_original_home() -> None:
+    source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    fallback_body = source.split('if draft.get("scenario_type") is None:', 1)[1].split("try: data, outputs", 1)[0]
+    home = home_markup(branch_count=324, saved_count="168") + overview_markup(branch_count=324, saved_count="168")
+
+    assert "home-page-header" in home
+    assert "home-decision-panel" in home
+    assert "home-overview-grid" in home
+    assert "سامانه تحلیل حساسیت و درجه‌بندی شعب" in home
+    assert "تصمیم‌گیری هوشمند با تحلیل سناریو" in home
+    assert 'st.switch_page("app.py")' in fallback_body
+    assert "فضای تحلیل حساسیت" not in fallback_body
+    assert "choose_" not in fallback_body
+    assert "st.columns(3)" not in fallback_body
+
+
+def test_multi_branch_sidebar_entry_still_opens_dedicated_workspace() -> None:
+    nav_source = (ROOT / "ui" / "navigation.py").read_text(encoding="utf-8")
+    builder_source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+
+    assert "سناریوی چندشعبه‌ای" in [label for _, label, _ in NAVIGATION_ITEMS]
+    assert ScenarioType.MULTI_BRANCH in [mode for _, _, mode in NAVIGATION_ITEMS]
+    assert "scenario_href(item.scenario_type)" in nav_source
+    assert "start_new_scenario(st.session_state, mode)" in nav_source
+    assert "render_multi_branch_workspace(" in builder_source
+    assert "mode is ScenarioType.MULTI_BRANCH" in builder_source
+
+
 def test_management_overview_cards_have_polished_rtl_typography_and_icons() -> None:
     css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
     markup = overview_markup(branch_count=324, saved_count="168")

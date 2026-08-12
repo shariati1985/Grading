@@ -30,7 +30,7 @@ from services.primary_branch_policy import resolve_primary_branch
 from services.multi_branch_workspace_service import MultiBranchWorkspaceService
 from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
 from services.user_context import CurrentUser
-from ui.formatters import format_persian_number, parse_raw_input_value, persian_digits
+from ui.formatters import format_persian_number, parse_formatted_number, parse_raw_input_value, persian_digits
 from ui.multi_branch_state import (
     MULTI_BRANCH_STAGE_LABELS,
     MULTI_BRANCH_STAGE_ORDER,
@@ -84,8 +84,15 @@ def _actor_context(user: CurrentUser) -> ActorContext:
         actor_id=user.user_id,
         actor_scope=ActorScope.BRANCH if assigned_branch else ActorScope.HEAD_OFFICE,
         assigned_branch_code=str(assigned_branch) if assigned_branch else None,
-        can_select_primary_branch=not bool(assigned_branch),
+        can_select_primary_branch=True,
     )
+
+
+def _parse_percentage_input(value: object) -> float:
+    percentage = parse_formatted_number(value)
+    if percentage <= 0:
+        raise ValueError("درصد تغییر باید بزرگ‌تر از صفر باشد.")
+    return float(percentage)
 
 
 def _details(workspace: dict, data: pd.DataFrame, actor: ActorContext) -> None:
@@ -99,20 +106,7 @@ def _details(workspace: dict, data: pd.DataFrame, actor: ActorContext) -> None:
         workspace["scenario_name"] = columns[0].text_input(
             "نام سناریو", value=str(workspace.get("scenario_name") or ""), key="multi_branch_name"
         )
-        if actor.can_select_primary_branch:
-            current = workspace.get("primary_branch_code")
-            index = ids.index(str(current)) + 1 if current is not None and str(current) in ids else 0
-            selected = columns[1].selectbox(
-                "شعبه اصلی",
-                [None, *ids],
-                index=index,
-                format_func=lambda item: branch_select_label(item, names),
-                key="multi_branch_primary",
-            )
-            workspace["primary_branch_code"] = resolve_primary_branch(
-                actor, str(selected) if selected is not None else None
-            )
-        else:
+        if not actor.can_select_primary_branch:
             assigned = resolve_primary_branch(actor, None)
             if assigned not in ids:
                 st.error("شعبه تخصیص‌یافته کاربر در جامعه رسمی رتبه‌بندی وجود ندارد.")
@@ -125,6 +119,19 @@ def _details(workspace: dict, data: pd.DataFrame, actor: ActorContext) -> None:
                     disabled=True,
                     key="multi_branch_assigned_primary",
                 )
+        else:
+            current = workspace.get("primary_branch_code")
+            index = ids.index(str(current)) + 1 if current is not None and str(current) in ids else 0
+            selected = columns[1].selectbox(
+                "شعبه اصلی",
+                [None, *ids],
+                index=index,
+                format_func=lambda item: "انتخاب شعبه اصلی" if item is None else branch_select_label(item, names),
+                key="multi_branch_primary",
+            )
+            workspace["primary_branch_code"] = resolve_primary_branch(
+                actor, str(selected) if selected is not None else None
+            )
         columns[2].metric("جامعه محاسبه", f"{format_persian_number(len(data), 0)} شعبه")
     st.info("انتخاب شعبه اصلی فقط برای نمایش نتیجه محوری و ثبت تغییرات صریح مرحله چهارم است؛ هیچ شعبه‌ای از جامعه رتبه‌بندی حذف نمی‌شود.")
 
@@ -141,19 +148,29 @@ def _rule_editor(workspace: dict) -> None:
         with st.form("multi_general_rule_form", clear_on_submit=True):
             columns = st.columns([1.6, 1, 1])
             indicator = columns[0].selectbox(
-                "شاخص", available, format_func=lambda key: INDICATOR_REGISTRY[key].display_name
+                "شاخص",
+                [None, *available],
+                index=0,
+                format_func=lambda key: "انتخاب شاخص" if key is None else INDICATOR_REGISTRY[key].display_name,
             )
             direction = columns[1].radio(
                 "جهت تغییر", ("increase", "decrease"),
                 format_func=lambda value: "افزایش" if value == "increase" else "کاهش",
                 horizontal=True,
             )
-            percentage = columns[2].number_input("درصد تغییر", min_value=0.0, value=0.0, step=1.0)
+            percentage_text = columns[2].text_input("درصد تغییر", value="", placeholder="مثلاً 25 یا ۱۲٫۵")
             submitted = st.form_submit_button("افزودن قاعده عمومی", type="primary")
         if submitted:
-            rules.append({"indicator_key": indicator, "direction": direction, "percentage": float(percentage)})
-            invalidate_multi_branch_result(workspace)
-            st.rerun()
+            try:
+                if indicator is None:
+                    raise ValueError("شاخص را انتخاب کنید.")
+                percentage = _parse_percentage_input(percentage_text)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                rules.append({"indicator_key": indicator, "direction": direction, "percentage": percentage})
+                invalidate_multi_branch_result(workspace)
+                st.rerun()
     else:
         st.success("برای هر ۸ شاخص قاعده عمومی تعریف شده است.")
     _rule_cards(rules, "general", workspace)
@@ -187,9 +204,12 @@ def _exceptions(workspace: dict, data: pd.DataFrame) -> None:
         branch = columns[0].selectbox("شعبه استثنا", ids, format_func=lambda item: branch_select_label(item, names))
         occupied = {row["indicator_key"] for row in exceptions.get(branch, [])}
         available = [key for key in INDICATOR_REGISTRY if key not in occupied]
+        indicator_options = [None, *available] if available else [None]
         indicator = columns[1].selectbox(
-            "شاخص", available or list(INDICATOR_REGISTRY),
-            format_func=lambda key: INDICATOR_REGISTRY[key].display_name,
+            "شاخص",
+            indicator_options,
+            index=0,
+            format_func=lambda key: "انتخاب شاخص" if key is None else INDICATOR_REGISTRY[key].display_name,
             disabled=not available,
         )
         direction = columns[2].radio(
@@ -197,14 +217,21 @@ def _exceptions(workspace: dict, data: pd.DataFrame) -> None:
             format_func=lambda value: "افزایش" if value == "increase" else "کاهش",
             horizontal=True,
         )
-        percentage = columns[3].number_input("درصد اختصاصی", min_value=0.0, value=0.0, step=1.0)
+        percentage_text = columns[3].text_input("درصد اختصاصی", value="", placeholder="مثلاً 25 یا ۱۲٫۵")
         submitted = st.form_submit_button("افزودن استثنا", type="primary", disabled=not available)
     if submitted:
-        exceptions.setdefault(branch, []).append(
-            {"indicator_key": indicator, "direction": direction, "percentage": float(percentage)}
-        )
-        invalidate_multi_branch_result(workspace)
-        st.rerun()
+        try:
+            if indicator is None:
+                raise ValueError("شاخص را انتخاب کنید.")
+            percentage = _parse_percentage_input(percentage_text)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            exceptions.setdefault(branch, []).append(
+                {"indicator_key": indicator, "direction": direction, "percentage": percentage}
+            )
+            invalidate_multi_branch_result(workspace)
+            st.rerun()
     if not exceptions:
         st.markdown('<div class="multi-branch-empty">ثبت استثنا اختیاری است.</div>', unsafe_allow_html=True)
     for branch_code in list(exceptions):

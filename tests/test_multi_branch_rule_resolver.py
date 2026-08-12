@@ -95,6 +95,29 @@ def test_exception_only_replaces_same_indicator_and_is_not_cumulative() -> None:
     assert _manifest(result, "202", "avg_loans").scenario_value == pytest.approx(240.0)
 
 
+def test_submitted_non_zero_percentage_is_preserved_and_applied() -> None:
+    scenario = _scenario(
+        general_rules=(PercentageRule("avg_deposits", PercentageDirection.INCREASE, 25.0),)
+    )
+
+    result = MultiBranchRuleResolver.resolve(scenario, _baseline())
+
+    change = _manifest(result, "202", "avg_deposits")
+    assert scenario.general_rules[0].percentage == 25.0
+    assert change.effective_percentage == 25.0
+    assert change.scenario_value == pytest.approx(250.0)
+
+
+def test_decimal_percentage_is_applied_without_rounding() -> None:
+    scenario = _scenario(
+        general_rules=(PercentageRule("avg_deposits", PercentageDirection.INCREASE, 12.5),)
+    )
+
+    result = MultiBranchRuleResolver.resolve(scenario, _baseline())
+
+    assert _manifest(result, "101", "avg_deposits").scenario_value == pytest.approx(112.5)
+
+
 def test_signed_profit_loss_uses_raw_percentage_formula() -> None:
     scenario = _scenario(
         general_rules=(PercentageRule("profit_loss", PercentageDirection.INCREASE, 10.0),)
@@ -110,6 +133,15 @@ def test_decrease_above_one_hundred_is_rejected_when_final_value_breaks_indicato
     with pytest.raises(MultiBranchRuleValidationError) as error:
         MultiBranchRuleResolver.resolve(scenario, _baseline())
     assert "BELOW_MINIMUM" in error.value.issues[0]
+
+
+def test_zero_percentage_rule_is_rejected() -> None:
+    scenario = _scenario(
+        general_rules=(PercentageRule("avg_deposits", PercentageDirection.INCREASE, 0.0),)
+    )
+    with pytest.raises(MultiBranchRuleValidationError) as error:
+        MultiBranchRuleResolver.resolve(scenario, _baseline())
+    assert "INVALID_PERCENTAGE:GENERAL:avg_deposits" in error.value.issues
 
 
 def test_population_mismatch_prevents_silent_ranking_universe_drop() -> None:
