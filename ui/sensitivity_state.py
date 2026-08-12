@@ -48,6 +48,8 @@ def switch_scenario_mode(state: MutableMapping[str, Any], mode: ScenarioType) ->
     current = state[SENSITIVITY_DRAFT_KEY]
     if current.get("scenario_type") is not mode:
         state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+        if mode is ScenarioType.MULTI_BRANCH:
+            state.pop("multi_branch_workspace", None)
     return state[SENSITIVITY_DRAFT_KEY]
 
 
@@ -55,6 +57,8 @@ def start_new_scenario(state: MutableMapping[str, Any], mode: ScenarioType) -> d
     """Start a clean wizard even when the requested mode matches the old draft."""
     initialize_sensitivity_state(state)
     state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+    if mode is ScenarioType.MULTI_BRANCH:
+        state.pop("multi_branch_workspace", None)
     for key in list(state):
         text = str(key)
         if text in {"sensitivity_focus_branch", "official_result_branch"} or text.startswith(

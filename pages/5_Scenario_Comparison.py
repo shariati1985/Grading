@@ -8,16 +8,23 @@ from typing import Final
 import pandas as pd
 import streamlit as st
 
+from domain.scenario_contracts import ScenarioType
 from persistence.contracts import AuthorizationError, ConcurrencyError, ScenarioPersistenceError
 from persistence.models import ScenarioRecord
 from services.factory import create_local_scenario_service
 from services.scenario_management_service import ScenarioManagementService
+from services.multi_branch_workspace_service import (
+    SCENARIO_TYPE as MULTI_BRANCH_SCENARIO_TYPE,
+    MultiBranchWorkspaceService,
+)
 from services.selection_scope import SelectionScope
 from engine.scenario_rule_engine import RuleOperation
 from ui import initialize_session_state
 from ui.manual_override_state import restore_override_rows
 from ui.components import render_empty_state, render_page_header
 from ui.styles import apply_global_styles
+from ui.multi_branch_state import MULTI_BRANCH_STATE_KEY
+from ui.data_access import load_dashboard_data
 from ui.tables import render_table
 
 ROOT: Final[Path] = Path(__file__).resolve().parents[1]
@@ -37,6 +44,21 @@ def get_scenario_service(project_root: Path) -> ScenarioManagementService:
 def _open_in_builder(
     service: ScenarioManagementService, scenario: ScenarioRecord
 ) -> None:
+    if scenario.summary.get("scenario_type") == MULTI_BRANCH_SCENARIO_TYPE:
+        data, _ = load_dashboard_data(ROOT / "Data.xlsx", scenario.baseline_period)
+        loaded = MultiBranchWorkspaceService(service).load(
+            scenario.scenario_id,
+            branch_ids=data["branch_id"].astype(str).tolist(),
+        )
+        loaded.workspace["restore_warnings"] = list(loaded.warnings)
+        for key in list(st.session_state):
+            if str(key).startswith("multi_"):
+                st.session_state.pop(key, None)
+        st.session_state[MULTI_BRANCH_STATE_KEY] = loaded.workspace
+        if "sensitivity_draft" in st.session_state:
+            st.session_state["sensitivity_draft"]["scenario_type"] = ScenarioType.MULTI_BRANCH
+        st.switch_page("pages/2_Scenario_Builder.py")
+        return
     record, changes, _, edit_modes = service.load_scenario_editor(
         scenario.scenario_id
     )
@@ -242,6 +264,11 @@ def _headers_table(records: list[ScenarioRecord]) -> pd.DataFrame:
                 "مالک": item.owner_display_name,
                 "دوره": item.baseline_period,
                 "وضعیت": STATUS_LABELS[item.status],
+                "نوع": (
+                    "چندشعبه‌ای"
+                    if item.summary.get("scenario_type") == MULTI_BRANCH_SCENARIO_TYPE
+                    else "شعبه‌محور / هدف"
+                ),
                 "تعداد شعب تغییریافته": int(
                     item.summary.get("changed_branch_count", len(item.selected_branch_ids))
                 ),

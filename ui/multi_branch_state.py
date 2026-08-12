@@ -52,6 +52,10 @@ def new_multi_branch_workspace() -> dict[str, Any]:
         "preview": None,
         "execution_result": None,
         "show_result": False,
+        "persistence": {},
+        "entry_source": "new",
+        "persisted_result_summaries": [],
+        "show_persisted_result": False,
     }
 
 

@@ -18,6 +18,7 @@ from services.scenario_execution_service import ScenarioExecutionService, Scenar
 from services.selection_scope import SelectionResolver, SelectionScope
 from services.user_context import load_current_user
 from services.factory import create_local_scenario_service
+from services.multi_branch_workspace_service import MultiBranchWorkspaceService
 from services.scenario_workspace_service import ScenarioWorkspaceService
 from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
 from ui import initialize_session_state
@@ -71,6 +72,11 @@ def load_baseline():
 @st.cache_resource
 def workspace_service() -> ScenarioWorkspaceService:
     return ScenarioWorkspaceService(create_local_scenario_service(ROOT))
+
+
+@st.cache_resource
+def multi_branch_workspace_service() -> MultiBranchWorkspaceService:
+    return MultiBranchWorkspaceService(create_local_scenario_service(ROOT))
 
 
 def _persistence_error(exc: Exception) -> None:
@@ -1303,7 +1309,9 @@ def main() -> None:
     except (FileNotFoundError, ValueError, OSError): st.error("اطلاعات کاربر در دسترس نیست."); return
     mode = draft["scenario_type"]
     if mode is ScenarioType.MULTI_BRANCH:
-        render_multi_branch_workspace(data, outputs, user)
+        render_multi_branch_workspace(
+            data, outputs, user, multi_branch_workspace_service()
+        )
         return
     _scenario_page_header(mode)
     if mode is ScenarioType.FOCUS_BRANCH_ONLY:

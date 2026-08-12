@@ -10,6 +10,7 @@ from ui.multi_branch_state import (
     new_multi_branch_workspace,
     reset_multi_branch_state,
 )
+from ui.sensitivity_state import start_new_scenario
 from ui.sensitivity_state import SENSITIVITY_DRAFT_KEY, new_scenario_draft
 
 
@@ -61,3 +62,9 @@ def test_workflow_prevents_skipping_entry_stages() -> None:
     move_to_multi_branch_stage(workspace, MultiBranchStage.PRIMARY_BRANCH_OVERRIDES)
     move_to_multi_branch_stage(workspace, MultiBranchStage.REVIEW)
     assert current_multi_branch_stage(workspace) is MultiBranchStage.REVIEW
+
+
+def test_starting_new_multi_branch_scenario_discards_previous_workspace() -> None:
+    state = {MULTI_BRANCH_STATE_KEY: {"scenario_name": "قبلی"}}
+    start_new_scenario(state, ScenarioType.MULTI_BRANCH)
+    assert MULTI_BRANCH_STATE_KEY not in state

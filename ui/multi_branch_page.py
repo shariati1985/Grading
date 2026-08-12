@@ -27,6 +27,8 @@ from services.multi_branch_rule_resolver import (
     MultiBranchRuleValidationError,
 )
 from services.primary_branch_policy import resolve_primary_branch
+from services.multi_branch_workspace_service import MultiBranchWorkspaceService
+from persistence.contracts import ConcurrencyError, ScenarioPersistenceError
 from services.user_context import CurrentUser
 from ui.formatters import format_persian_number, parse_raw_input_value, persian_digits
 from ui.multi_branch_state import (
@@ -319,7 +321,61 @@ def _review(
             st.rerun()
 
 
-def _result(workspace: dict) -> None:
+def _persistence_error(exc: Exception) -> None:
+    if isinstance(exc, ConcurrencyError):
+        st.error("این سناریو در نشست دیگری تغییر کرده است. نسخه ذخیره‌شده را دوباره باز کنید.")
+    elif isinstance(exc, (ScenarioPersistenceError, ValueError)):
+        st.error(str(exc))
+    else:
+        st.error("عملیات ذخیره‌سازی انجام نشد. لطفاً دوباره تلاش کنید.")
+
+
+def _save_draft(
+    workspace: dict, service: MultiBranchWorkspaceService, *, save_as_new: bool = False
+) -> None:
+    if not str(workspace.get("scenario_name") or "").strip():
+        st.error("برای ذخیره پیش‌نویس، نام سناریو را وارد کنید.")
+        return
+    try:
+        record = service.save_draft(workspace, save_as_new=save_as_new)
+    except Exception as exc:
+        _persistence_error(exc)
+    else:
+        action = "نسخه جدید" if save_as_new else "پیش‌نویس"
+        st.success(f"{action} با موفقیت ذخیره شد (نسخه {record.row_version}).")
+
+
+def _persistence_bar(workspace: dict, service: MultiBranchWorkspaceService) -> None:
+    persisted = dict(workspace.get("persistence") or {})
+    dirty = service.has_unsaved_changes(workspace)
+    status = persisted.get("status")
+    if not persisted.get("scenario_id"):
+        label = "ذخیره‌نشده"
+    elif dirty:
+        label = "دارای تغییرات ذخیره‌نشده"
+    elif status == "executed":
+        label = "نتیجه رسمی ذخیره‌شده"
+    else:
+        label = "پیش‌نویس ذخیره‌شده"
+    columns = st.columns([3.8, 1.2, 1.45])
+    columns[0].caption(
+        f"وضعیت: {label}"
+        + (f" · نسخه {persisted.get('version_number', 1)}" if persisted.get("scenario_id") else "")
+    )
+    if columns[1].button("ذخیره پیش‌نویس", key="multi_save_draft", width="stretch"):
+        _save_draft(workspace, service)
+    if columns[2].button(
+        "ذخیره به‌عنوان نسخه جدید",
+        key="multi_save_new_version",
+        disabled=not bool(persisted.get("scenario_id")),
+        width="stretch",
+    ):
+        _save_draft(workspace, service, save_as_new=True)
+
+
+def _result(
+    workspace: dict, data: pd.DataFrame, service: MultiBranchWorkspaceService
+) -> None:
     result = workspace["execution_result"]
     scenario = result["scenario"]
     manifest = result["resolved"].manifest
@@ -335,8 +391,54 @@ def _result(workspace: dict) -> None:
         manifest,
         scenario.primary_branch_code,
     )
-    if st.button("بازگشت به بازبینی و ویرایش"):
+    actions = st.columns([1.5, 1.5, 4])
+    if actions[0].button("ذخیره نتیجه رسمی", type="primary", width="stretch"):
+        try:
+            record = service.save_execution(workspace, data=data)
+        except Exception as exc:
+            _persistence_error(exc)
+        else:
+            st.success(f"نتیجه رسمی ذخیره شد (نسخه رکورد {record.row_version}).")
+    if actions[1].button("بازگشت و ویرایش", width="stretch"):
         workspace["show_result"] = False
+        st.rerun()
+
+
+def _persisted_result(workspace: dict, data: pd.DataFrame) -> None:
+    """Show the immutable saved snapshot before an optional current-model rerun."""
+    results = list(workspace.get("persisted_result_summaries") or [])
+    names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].astype(str).to_dict()
+    primary = str(workspace.get("primary_branch_code") or "")
+    primary_result = next((item for item in results if item.branch_id == primary), None)
+    st.success(f"نتیجه رسمی ذخیره‌شده سناریوی «{workspace['scenario_name']}» بازیابی شد.")
+    cards = st.columns(4)
+    cards[0].metric("تعداد شعب نتیجه", format_persian_number(len(results), 0))
+    cards[1].metric("شعب صعودکرده", format_persian_number(sum(item.rank_change > 0 for item in results), 0))
+    cards[2].metric("شعب نزول‌کرده", format_persian_number(sum(item.rank_change < 0 for item in results), 0))
+    cards[3].metric(
+        "رتبه ذخیره‌شده شعبه اصلی",
+        format_persian_number(primary_result.scenario_rank, 0) if primary_result else "—",
+    )
+    table = pd.DataFrame([
+        {
+            "کد شعبه": item.branch_id,
+            "نام شعبه": names.get(item.branch_id, "—"),
+            "رتبه مبنا": item.baseline_rank,
+            "رتبه سناریو": item.scenario_rank,
+            "تغییر رتبه": item.rank_change,
+            "امتیاز مبنا": item.baseline_score,
+            "امتیاز سناریو": item.scenario_score,
+            "تغییر امتیاز": item.score_change,
+            "درجه مبنا": item.baseline_grade,
+            "درجه سناریو": item.scenario_grade,
+        }
+        for item in results
+    ])
+    st.dataframe(table, width="stretch", height=520, hide_index=True)
+    st.caption("این جدول Snapshot رسمی زمان ذخیره است. اجرای مجدد، نتیجه را با داده و مدل جاری محاسبه می‌کند.")
+    if st.button("ویرایش یا اجرای مجدد سناریو", type="primary"):
+        workspace["show_persisted_result"] = False
+        workspace["current_stage"] = MultiBranchStage.REVIEW.value
         st.rerun()
 
 
@@ -365,7 +467,10 @@ def _navigation(stage: MultiBranchStage, workspace: dict) -> None:
 
 
 def render_multi_branch_workspace(
-    data: pd.DataFrame, baseline_outputs, current_user: CurrentUser
+    data: pd.DataFrame,
+    baseline_outputs,
+    current_user: CurrentUser,
+    persistence_service: MultiBranchWorkspaceService,
 ) -> None:
     """Render the isolated multi-branch workflow in the existing application shell."""
     workspace = initialize_multi_branch_state(st.session_state)
@@ -377,8 +482,18 @@ def render_multi_branch_workspace(
         '<p>تعریف قواعد شبکه، استثناهای شعب و مقادیر اختصاصی شعبه اصلی</p></div></header>',
         unsafe_allow_html=True,
     )
+    if workspace.get("entry_source") == "saved":
+        st.info("سناریوی ذخیره‌شده بازیابی شد؛ قواعد، استثناها و مقادیر شعبه اصلی برای ادامه کار آماده‌اند.")
+        workspace["entry_source"] = "active"
+    for warning in workspace.pop("restore_warnings", []):
+        st.warning(warning)
+    _persistence_bar(workspace, persistence_service)
+    if workspace.get("show_persisted_result") and workspace.get("persisted_result_summaries"):
+        _persisted_result(workspace, data)
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
     if workspace.get("show_result") and workspace.get("execution_result"):
-        _result(workspace)
+        _result(workspace, data, persistence_service)
         st.markdown("</div>", unsafe_allow_html=True)
         return
     stage = current_multi_branch_stage(workspace)
