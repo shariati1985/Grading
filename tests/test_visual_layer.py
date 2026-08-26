@@ -771,3 +771,58 @@ def test_focus_result_renderer_uses_html_for_result_fragments_and_no_multi_contr
     assert "st.markdown(_managerial_summary_html(comparison, len(changed_rows)), unsafe_allow_html=True)" in body
     assert "قواعد عمومی شعب مشمول" not in body
     assert "شعبه اصلی سناریو" not in body
+
+
+def test_multi_branch_result_uses_three_distinct_tabs_and_scoped_root() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    assert 'data-multi-branch-results="true"' in source
+    assert '["نمای مدیریتی", "تحلیل شعب و شاخص‌ها", "جزئیات و ممیزی"]' in source
+    assert "_render_overview(table, manifest)" in source
+    assert "_render_analysis(table, manifest if audit_available else ())" in source
+    assert "_render_details(table, manifest if audit_available else ())" in source
+
+
+def test_multi_branch_compact_table_replaces_old_primary_concatenated_audit_columns() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    compact_body = source.split("def compact_branch_table", 1)[1].split("def result_header_html", 1)[0]
+    details_body = source.split("def _render_details", 1)[1].split("def render_multi_branch_results", 1)[0]
+    assert "مقدار خام فعلی" not in compact_body
+    assert "مقدار خام سناریویی" not in compact_body
+    assert "درصد یا مقدار اعمال‌شده" not in compact_body
+    assert "build_audit_long_form" in details_body
+    assert "مشاهده جزئیات فنی و ممیزی" in details_body
+
+
+def test_multi_branch_result_css_is_scoped_and_does_not_modify_branch_or_target_renderers() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    builder_source = (ROOT / "pages" / "2_Scenario_Builder.py").read_text(encoding="utf-8")
+    scoped_css = css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+    assert '[data-multi-branch-results="true"] .multi-kpi-grid' in css_source
+    assert ".multi-results-header h1" in scoped_css
+    assert ".results-workspace-header" not in scoped_css
+    assert "target-rank" not in source.lower()
+    assert "def _focus_result_page" in builder_source
+    assert "def _target_result" in builder_source
+
+
+def test_multi_branch_result_header_primary_panel_and_tabs_are_visual_contract() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    scoped_css = css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+    assert "multi-results-metadata" in source
+    assert "multi-primary-panel" in source
+    assert "multi-movers-grid" in source
+    assert "managerial_conclusion_model" in source
+    assert ".multi-branch-page [data-testid=\"stTabs\"] [role=\"tablist\"]" in css_source
+    assert "position: static" in css_source.split('.multi-branch-page [data-testid="stTabs"] [role="tablist"]', 1)[1].split("}", 1)[0]
+    assert ".multi-results-metadata article" in scoped_css
+
+
+def test_multi_branch_result_avoids_ambiguous_arrow_only_comparisons() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    result_body = source.split("def _render_primary", 1)[1]
+    assert "←" not in result_body
+    assert "رتبه فعلی" in result_body
+    assert "رتبه سناریویی" in result_body
+    assert "format_rank_movement_label" in result_body

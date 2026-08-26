@@ -294,3 +294,76 @@ def build_network_rank_chart(
         show_legend=False,
         left_margin=210,
     )
+
+
+def build_impact_distribution_chart(summary: Any) -> go.Figure:
+    """Build compact stacked distribution bars for rank and grade outcomes."""
+    total = max(1, int(summary.total_branches))
+    figure = go.Figure()
+    rows = [
+        ("جابه‌جایی رتبه", [("صعود رتبه", summary.rank_up, "#16835B"), ("نزول رتبه", summary.rank_down, "#C43D4B"), ("بدون تغییر رتبه", summary.rank_same, "#687386")]),
+        ("تغییر درجه", [("بهبود درجه", summary.grade_up, "#16835B"), ("افت درجه", summary.grade_down, "#C43D4B"), ("بدون تغییر درجه", summary.grade_same, "#344765")]),
+    ]
+    for label, parts in rows:
+        for name, count, color in parts:
+            pct = count * 100 / total
+            figure.add_trace(go.Bar(
+                name=name,
+                y=[label],
+                x=[count],
+                orientation="h",
+                marker_color=color,
+                text=[f"{count} ({pct:.1f}%)" if pct >= 8 else ""],
+                textposition="inside" if pct >= 8 else "outside",
+                hovertemplate=f"{name}<br>تعداد: %{{x:.0f}}<br>درصد جامعه: {pct:.1f}%<extra></extra>",
+            ))
+    figure.update_layout(barmode="stack")
+    figure.update_xaxes(title="تعداد شعب", range=[0, total], tickformat="d")
+    return apply_chart_layout(figure, title="توزیع اثر سناریو بر شبکه", height=300, left_margin=125)
+
+
+def build_indicator_impact_chart(frame: pd.DataFrame) -> go.Figure:
+    """Build affected-branch count by indicator."""
+    prepared = frame.sort_values("affected_branches", ascending=True)
+    figure = go.Figure(go.Bar(
+        x=prepared["affected_branches"],
+        y=prepared["indicator_name"],
+        orientation="h",
+        marker_color="#65328A",
+        hovertemplate="%{y}<br>شعب متأثر: %{x:.0f}<extra></extra>",
+    ))
+    maximum = max(1, int(prepared["affected_branches"].max()))
+    figure.update_xaxes(title="تعداد شعب دارای تغییر مقدار", range=[0, maximum + 1], tickformat="d")
+    return apply_chart_layout(figure, title="اثر قواعد به تفکیک شاخص", height=max(320, 90 + len(prepared) * 42), show_legend=False, left_margin=190)
+
+
+def build_multi_branch_rank_movement_chart(frame: pd.DataFrame, *, mode: str = "largest_improvements", limit: int = 15) -> go.Figure | None:
+    """Show meaningful non-zero rank movements, where positive means improvement."""
+    moved = frame.loc[frame["rank_change"].ne(0)].copy()
+    if moved.empty:
+        return None
+    if mode == "largest_improvements":
+        moved = moved.loc[moved["rank_change"].gt(0)].nlargest(limit, "rank_change")
+        title = "بیشترین بهبودهای رتبه"
+    elif mode == "largest_declines":
+        moved = moved.loc[moved["rank_change"].lt(0)].nsmallest(limit, "rank_change")
+        title = "بیشترین افت‌های رتبه"
+    else:
+        moved = moved.assign(_abs=moved["rank_change"].abs()).nlargest(limit, "_abs").drop(columns="_abs")
+        title = "همه شعب دارای جابه‌جایی رتبه"
+    if moved.empty:
+        return None
+    moved = moved.assign(
+        branch_label=moved["branch_name"].astype(str) + " (" + moved["branch_id"].astype(str) + ")",
+        color=moved["rank_change"].map(lambda value: "#16835B" if value > 0 else "#C43D4B"),
+    ).sort_values("rank_change")
+    figure = go.Figure(go.Bar(
+        x=moved["rank_change"],
+        y=moved["branch_label"],
+        orientation="h",
+        marker_color=moved["color"],
+        hovertemplate="%{y}<br>جابه‌جایی رتبه: %{x:+d}<extra></extra>",
+    ))
+    minimum, maximum = rank_axis_range(moved["rank_change"])
+    figure.update_xaxes(title="جابه‌جایی رتبه (مثبت = بهبود)", range=[minimum, maximum], dtick=1, tickformat="d", zeroline=True, zerolinewidth=2)
+    return apply_chart_layout(figure, title=title, height=max(330, min(620, 120 + len(moved) * 32)), show_legend=False, left_margin=220)
