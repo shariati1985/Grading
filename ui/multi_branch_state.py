@@ -9,6 +9,7 @@ from typing import Any
 
 
 MULTI_BRANCH_STATE_KEY = "multi_branch_workspace"
+SCROLL_TO_TOP_KEY = "_multi_branch_scroll_to_top"
 
 
 class MultiBranchStage(str, Enum):
@@ -68,7 +69,7 @@ def current_multi_branch_stage(workspace: dict[str, Any]) -> MultiBranchStage:
 
 
 def move_to_multi_branch_stage(
-    workspace: dict[str, Any], target: MultiBranchStage
+    workspace: dict[str, Any], target: MultiBranchStage, *, request_scroll: bool = True
 ) -> None:
     """Move through the fixed workflow without skipping an unfinished stage."""
     current = current_multi_branch_stage(workspace)
@@ -77,7 +78,13 @@ def move_to_multi_branch_stage(
     if target_index > current_index + 1:
         raise ValueError("مراحل ورود اطلاعات سناریو باید به‌ترتیب تکمیل شوند.")
     workspace["current_stage"] = target.value
+    if request_scroll:
+        workspace[SCROLL_TO_TOP_KEY] = True
     invalidate_multi_branch_result(workspace)
+
+
+def consume_scroll_to_top(workspace: dict[str, Any]) -> bool:
+    return bool(workspace.pop(SCROLL_TO_TOP_KEY, False))
 
 
 def initialize_multi_branch_state(state: MutableMapping[str, Any]) -> dict[str, Any]:

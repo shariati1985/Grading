@@ -777,9 +777,11 @@ def test_multi_branch_result_uses_three_distinct_tabs_and_scoped_root() -> None:
     source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
     assert 'data-multi-branch-results="true"' in source
     assert '["نمای مدیریتی", "تحلیل شعب و شاخص‌ها", "جزئیات و ممیزی"]' in source
-    assert "_render_overview(table, manifest)" in source
+    assert "_render_overview(table, manifest, primary_branch_code)" in source
     assert "_render_analysis(table, manifest if audit_available else ())" in source
-    assert "_render_details(table, manifest if audit_available else ())" in source
+    assert "_render_details(table, manifest if audit_available else (), audit_available=audit_available)" in source
+    assert 'st.markdown("</div>"' not in source
+    assert '<div data-multi-branch-results="true">' not in source
 
 
 def test_multi_branch_compact_table_replaces_old_primary_concatenated_audit_columns() -> None:
@@ -810,13 +812,261 @@ def test_multi_branch_result_header_primary_panel_and_tabs_are_visual_contract()
     css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
     source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
     scoped_css = css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+    assert "multi-results-hero" in source
     assert "multi-results-metadata" in source
     assert "multi-primary-panel" in source
+    assert "multi-primary-metric-card" in source
+    assert "multi-primary-rule-card" in source
     assert "multi-movers-grid" in source
+    assert "multi-distribution-grid" in source
     assert "managerial_conclusion_model" in source
+    assert "جمع‌بندی مدیریتی" not in source
+    assert "managerial-conclusion" not in source
     assert ".multi-branch-page [data-testid=\"stTabs\"] [role=\"tablist\"]" in css_source
     assert "position: static" in css_source.split('.multi-branch-page [data-testid="stTabs"] [role="tablist"]', 1)[1].split("}", 1)[0]
-    assert ".multi-results-metadata article" in scoped_css
+    assert ".multi-results-metadata .multi-metric-item" in scoped_css
+    assert '[data-multi-branch-results="true"].multi-results-hero' in css_source
+    assert '[data-multi-branch-results="true"].multi-kpi-grid' in css_source
+    assert '[data-multi-branch-results="true"].multi-primary-panel' in css_source
+    assert '[data-multi-branch-results="true"].multi-distribution-grid' in css_source
+    assert '[data-multi-branch-results="true"].multi-movers-grid' in css_source
+
+
+def test_multi_branch_percentage_inputs_use_clean_scoped_placeholder() -> None:
+    source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    assert source.count('placeholder="تکمیل شود"') == 3
+    assert "مثلاً 25" not in source
+    assert "مثلاً 25 یا ۱۲٫۵" not in source
+    assert "multi-compact-form" in source
+    assert '.multi-branch-page .multi-compact-form [data-testid="InputInstructions"]' in css_source
+    assert "\n        [data-testid=\"InputInstructions\"] { display: none" not in css_source
+
+
+def test_multi_branch_builder_rows_and_primary_identity_are_compact_contract() -> None:
+    source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    assert "multi-rule-row navy" in source
+    assert "قاعده عمومی" in source
+    assert "multi-primary-identity" in source
+    assert "شعبه اصلی:" in source
+    assert "کد <b dir=\"ltr\"" in source
+    assert ".multi-rule-list" in css_source
+    assert ".multi-rule-row" in css_source
+    assert ".multi-primary-identity" in css_source
+
+
+def test_multi_branch_primary_indicator_uses_empty_sentinel() -> None:
+    source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    body = source.split("def _primary_overrides", 1)[1].split("def _build_scenario", 1)[0]
+    assert "indicator_options = [None, *available]" in body
+    assert '"انتخاب شاخص" if key is None' in body
+    assert "index=0" in body
+    assert 'key="multi_primary_indicator"' in body
+    assert "available or list(INDICATOR_REGISTRY)" not in body
+    assert 'raise ValueError("شاخص شعبه اصلی را انتخاب کنید.")' in body
+    assert "overrides[indicator]" in body
+
+
+def test_multi_branch_forms_use_stable_keys_and_do_not_clear_on_failed_submit() -> None:
+    source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    for key in (
+        "multi_general_indicator",
+        "multi_general_direction",
+        "multi_exception_branch",
+        "multi_exception_indicator",
+        "multi_exception_direction",
+        "multi_primary_indicator",
+        "multi_primary_mode",
+        "multi_primary_direction",
+    ):
+        assert f'key="{key}"' in source
+    assert 'clear_on_submit=True' not in source
+
+
+def test_active_exception_indicator_selectbox_uses_branch_scoped_availability_function() -> None:
+    source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    body = source.split("def _exceptions", 1)[1].split("def _primary_overrides", 1)[0]
+    before_form, form_body = body.split('with st.form("multi_exception_form"):', 1)
+
+    assert "def get_available_exception_indicator_keys" in source
+    assert "general_rules" not in source.split("def get_available_exception_indicator_keys", 1)[1].split("def _exception_indicator_options", 1)[0]
+    assert 'key="multi_exception_branch"' in before_form
+    assert "available_exception_indicators = get_available_exception_indicator_keys(" in before_form
+    assert "list(INDICATOR_REGISTRY), exceptions, branch" in before_form
+    assert "indicator_options" in form_body
+    assert "columns[0].selectbox" in form_body
+    assert 'key="multi_exception_indicator"' in form_body
+
+
+def test_multi_branch_archive_view_recognizes_and_opens_multi_branch_records() -> None:
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    assert "MULTI_BRANCH_SCENARIO_TYPE" in source
+    assert "MultiBranchWorkspaceService" in source
+    assert "_group_saved_records(records)" in source
+    assert "multi_branch_logical_key(item)" in source
+    assert "_multi_branch_service().create_new_version" in source
+
+
+def test_saved_archive_delete_requires_confirmation_and_supports_multi_branch() -> None:
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    body = source.split("def render_saved_scenarios_view", 1)[1].split("def main", 1)[0]
+
+    assert "حذف سناریو" in body
+    assert "confirm_scenario_delete" in body
+    assert "حذف قطعی" in body
+    assert "انصراف" in body
+    assert "_delete_record_group(grouped_items)" in body
+    assert "_multi_branch_service().delete_scenario" in source
+    assert "mode == MULTI_BRANCH_SCENARIO_TYPE" in source
+    assert 'st.session_state["multi_branch_workspace"] = loaded.workspace' in source
+    assert "SCENARIO_TYPE_LABELS[ScenarioType.MULTI_BRANCH]" in source
+    assert "multi_branch_definition" in source
+
+
+def test_multi_branch_review_uses_cards_not_raw_dataframes() -> None:
+    source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    review_body = source.split("def _review(", 1)[1].split("def _persistence_error", 1)[0]
+    assert "multi-review-hero" in review_body
+    assert "multi-review-family-grid" in review_body
+    assert "_render_review_rule_card" in review_body
+    assert "_render_exception_card" in review_body
+    assert "_render_primary_rule_card" in review_body
+    assert "st.dataframe" not in review_body
+    assert "multi-precedence" in review_body
+    assert "مرحله قبل" not in review_body
+    assert "مرحله بعد" not in review_body
+    assert "اجرای سناریو با مدل رسمی" in review_body
+    assert "جامعه رسمی" not in review_body
+    assert "جامعه (کل شعب)" in review_body
+    assert "_review_section_html" in review_body
+
+
+def test_multi_branch_review_rule_families_use_responsive_peer_grids() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    assert ".multi-review-section.general" in css_source
+    assert ".multi-review-section.exception .multi-review-card-grid" in css_source
+    assert ".multi-review-section.primary .multi-review-card-grid" in css_source
+    assert "repeat(3,minmax(220px,1fr))" in css_source
+    assert "repeat(2,minmax(300px,1fr))" in css_source
+
+
+def test_multi_branch_tab_css_has_no_sticky_or_fixed_positioning() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    tab_rules = [
+        block.split("}", 1)[0]
+        for block in css_source.split("[role=\"tablist\"]")[1:]
+    ]
+    assert tab_rules
+    for rule in tab_rules:
+        assert "position: sticky" not in rule
+        assert "position: fixed" not in rule
+        assert "z-index: 5" not in rule
+
+
+def test_multi_branch_numeric_values_are_ltr_isolated_and_css_scoped() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    results_source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    page_source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    scoped_css = css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+    assert 'dir="ltr"' in results_source
+    assert 'dir="ltr"' in page_source
+    assert "unicode-bidi: isolate" in scoped_css
+    assert ".multi-primary-rule-card" in scoped_css
+
+
+def test_multi_branch_results_contract_has_compact_movers_and_primary_blocks() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    scoped_css = css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+    assert "بیشترین صعود" in source
+    assert "بیشترین نزول" in source
+    assert "top_movers(table, improvement=True, limit=3)" in source
+    assert "top_movers(table, improvement=False, limit=3)" in source
+    assert "multi-primary-comparison" in source
+    assert "امتیاز" in source and "رتبه" in source and "درجه" in source
+    assert "شعبه اصلی در این سناریو" not in source
+    assert "←" not in source.split("def _primary_panel_html", 1)[1]
+    overview = source.split("def _render_overview", 1)[1].split("def _movers_panel_html", 1)[0]
+    assert overview.index("multi-kpi-grid") < overview.index("_render_primary") < overview.index("_distribution_grid_html") < overview.index("multi-movers-grid")
+    assert "build_impact_distribution_chart" not in overview
+    assert "render_chart" not in overview
+    assert "_compact_metric" in source
+    assert "movement-badge" in source
+    assert "multi-primary-metric-card" in source
+    assert "_primary_outcome_html(row, changes, primary_branch_code)" in source
+    assert "[data-multi-branch-results=\"true\"] .multi-movers-grid" in css_source
+    assert "grid-template-columns: repeat(2,minmax(0,1fr))" in scoped_css
+
+
+def test_multi_branch_result_terminology_and_hero_white_text() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    page_source = (ROOT / "ui" / "multi_branch_page.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    hero_css = css_source.split('[data-multi-branch-results="true"] .multi-results-hero {', 1)[1].split("}", 1)[0]
+    assert "جامعه رسمی" not in source
+    assert "جامعه رسمی" not in page_source
+    assert "جامعه (کل شعب)" in source
+    assert "جامعه (کل شعب)" in page_source
+    assert "linear-gradient" in hero_css and "#17345F" in hero_css and "#65328A" in hero_css
+    assert ".multi-results-hero h1" in css_source
+    assert "color: #fff !important" not in css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+
+
+def test_multi_branch_hero_metadata_uses_translucent_visible_blocks() -> None:
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    scoped_css = css_source.split('[data-multi-branch-results="true"]', 1)[1].split("/* Keep Streamlit", 1)[0]
+    metadata_rule = scoped_css.split(".multi-results-metadata .multi-metric-item", 1)[1].split("}", 1)[0]
+    label_rule = scoped_css.split(".multi-results-hero .multi-metric-item span", 1)[1].split("}", 1)[0]
+    value_rule = scoped_css.split(".multi-results-hero .multi-metric-item strong", 1)[1].split("}", 1)[0]
+    assert "rgba(255,255,255,.12)" in metadata_rule
+    assert "background: #fff" not in metadata_rule
+    assert "rgba(255,255,255,.72)" in label_rule
+    assert "color: #fff" in value_rule
+    assert "[data-multi-branch-results=\"true\"]" in css_source
+
+
+def test_multi_branch_active_distribution_uses_compact_html_rows() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    assert "def _distribution_grid_html" in source
+    assert "multi-distribution-panel" in source
+    assert "multi-distribution-row" in source
+    assert "multi-distribution-bar" in source
+    assert "build_impact_distribution_chart" not in source
+
+
+def test_multi_branch_analysis_rank_movement_defaults_to_all_moved() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    analysis = source.split("def _render_analysis", 1)[1].split("def _render_details", 1)[0]
+    assert '("all_moved", "largest_improvements", "largest_declines")' in analysis
+    assert '"all_moved": "همه جابه‌جا شده"' in analysis
+    assert 'key="multi_rank_movement_mode"' in analysis
+
+
+def test_multi_branch_audit_tab_uses_structured_cards_filters_and_export() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    css_source = (ROOT / "ui" / "styles.py").read_text(encoding="utf-8")
+    details = source.split("def _render_details", 1)[1].split("def render_multi_branch_results", 1)[0]
+    assert "_audit_overview_html" in details
+    assert "multi-audit-filters" in details
+    assert "_branch_audit_summary_html" in details
+    assert "multi-audit-warning" in details
+    assert "st.download_button" in details
+    assert 'with st.expander("مشاهده جزئیات فنی و ممیزی")' in details
+    assert ".multi-audit-overview" in css_source
+    assert ".multi-selected-branch-audit" in css_source
+
+
+def test_multi_branch_executive_components_do_not_use_native_metrics_or_cross_call_roots() -> None:
+    source = (ROOT / "ui" / "multi_branch_results.py").read_text(encoding="utf-8")
+    overview = source.split("def _render_overview", 1)[1].split("def _movers_panel_html", 1)[0]
+    primary = source.split("def _render_primary", 1)[1].split("def _branch_detail_cards_html", 1)[0]
+    assert "st.metric" not in overview
+    assert "st.metric" not in primary
+    assert 'data-multi-branch-results="true"' in overview
+    assert 'data-multi-branch-results="true"' in primary
+    assert "multi-kpi-grid" in overview
+    assert "multi-primary-panel" in primary
 
 
 def test_multi_branch_result_avoids_ambiguous_arrow_only_comparisons() -> None:

@@ -142,7 +142,7 @@ class ScenarioManagementService:
         results = (
             self._result_records(effective_id, comparison, branch_ids)
             if comparison is not None
-            else []
+            else None
         )
         change_records = self._change_records(effective_id, changes, edit_modes)
         if should_create:
@@ -162,7 +162,7 @@ class ScenarioManagementService:
                 selected_branch_ids=branch_ids,
                 summary=scenario_summary,
             )
-            return self.repository.create_scenario(record, change_records, results)
+            return self.repository.create_scenario(record, change_records, results or [])
 
         if expected_row_version is None:
             raise ValueError("برای به‌روزرسانی، نسخه رکورد سناریو لازم است.")

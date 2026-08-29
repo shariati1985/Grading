@@ -36,6 +36,7 @@ from ui.multi_branch_state import (
     MULTI_BRANCH_STAGE_LABELS,
     MULTI_BRANCH_STAGE_ORDER,
     MultiBranchStage,
+    consume_scroll_to_top,
     current_multi_branch_stage,
     initialize_multi_branch_state,
     invalidate_multi_branch_result,
@@ -86,6 +87,22 @@ def _actor_context(user: CurrentUser) -> ActorContext:
         actor_scope=ActorScope.BRANCH if assigned_branch else ActorScope.HEAD_OFFICE,
         assigned_branch_code=str(assigned_branch) if assigned_branch else None,
         can_select_primary_branch=True,
+    )
+
+
+def _scroll_to_top_once(workspace: dict) -> None:
+    if not consume_scroll_to_top(workspace):
+        return
+    st.markdown(
+        """
+        <script>
+        const main = window.parent.document.querySelector('[data-testid="stMain"]')
+          || window.parent.document.querySelector('[data-testid="stAppViewContainer"]');
+        if (main) { main.scrollTo({top: 0, behavior: 'instant'}); }
+        window.parent.scrollTo({top: 0, behavior: 'instant'});
+        </script>
+        """,
+        unsafe_allow_html=True,
     )
 
 
@@ -150,13 +167,115 @@ def _primary_rule_rows(overrides: dict[str, dict], baseline_row: pd.Series) -> p
     ])
 
 
+def _ltr_value(value: object) -> str:
+    rendered = "—" if value is None else str(value)
+    return f'<strong dir="ltr">{html.escape(rendered)}</strong>'
+
+
+def _review_fact(label: str, value: object) -> str:
+    return f'<span><small>{html.escape(label)}</small>{_ltr_value(value)}</span>'
+
+
+def _delete_button(label: str, key: str) -> bool:
+    return st.button(label, key=key, width="stretch")
+
+
+def _exception_used_indicators_for_branch(
+    exceptions: dict[str, list[dict]], branch_code: object | None
+) -> set[str]:
+    if branch_code is None:
+        return set()
+    return {
+        str(row.get("indicator_key"))
+        for row in exceptions.get(str(branch_code), [])
+        if row.get("indicator_key") is not None
+    }
+
+
+def get_available_exception_indicator_keys(
+    all_indicator_keys: list[str] | tuple[str, ...],
+    exceptions: dict[str, list[dict]],
+    selected_branch_code: object | None,
+) -> list[str]:
+    used_for_branch = _exception_used_indicators_for_branch(exceptions, selected_branch_code)
+    return [key for key in all_indicator_keys if key not in used_for_branch]
+
+
+def _exception_indicator_options(
+    exceptions: dict[str, list[dict]], branch_code: object | None
+) -> list[str | None]:
+    available = get_available_exception_indicator_keys(list(INDICATOR_REGISTRY), exceptions, branch_code)
+    return [None, *available] if available else [None]
+
+
+def _has_exception_rule(
+    exceptions: dict[str, list[dict]], branch_code: object, indicator_key: object
+) -> bool:
+    branch = str(branch_code)
+    indicator = str(indicator_key)
+    return indicator in _exception_used_indicators_for_branch(exceptions, branch)
+
+
+def _render_review_rule_card(rule: dict, branch_count: int) -> str:
+    indicator = INDICATOR_REGISTRY[rule["indicator_key"]].display_name
+    direction = _direction_label(rule["direction"])
+    return (
+        '<article class="multi-review-rule-card general">'
+        f'<header><h3>{html.escape(indicator)}</h3><span>قاعده عمومی</span></header>'
+        '<div class="multi-review-rule-body">'
+        f'{_review_fact("دامنه", f"تمام {format_persian_number(branch_count, 0)} شعبه جامعه (کل شعب)")}'
+        f'{_review_fact("جهت", direction)}'
+        f'{_review_fact("درصد واردشده", _format_entered_percentage(rule["percentage"], rule["direction"]))}'
+        '</div></article>'
+    )
+
+
+def _render_exception_card(branch_code: str, rule: dict, names: dict[str, str], general_keys: set[str]) -> str:
+    indicator = INDICATOR_REGISTRY[rule["indicator_key"]].display_name
+    status = "جایگزین قاعده عمومی" if rule["indicator_key"] in general_keys else "قاعده اختصاصی مستقل"
+    return (
+        '<article class="multi-review-rule-card exception">'
+        f'<header><h3>{html.escape(names.get(str(branch_code), "—"))}</h3><span>{html.escape(status)}</span></header>'
+        '<div class="multi-review-rule-body">'
+        f'{_review_fact("کد شعبه", persian_digits(branch_code))}'
+        f'{_review_fact("شاخص", indicator)}'
+        f'{_review_fact("جهت", _direction_label(rule["direction"]))}'
+        f'{_review_fact("درصد واردشده", _format_entered_percentage(rule["percentage"], rule["direction"]))}'
+        '</div></article>'
+    )
+
+
+def _render_primary_rule_card(row: dict) -> str:
+    cells = "".join(
+        _review_fact(label, row.get(key))
+        for label, key in (
+            ("ورودی کاربر", "entered"),
+            ("مقدار مبنا", "baseline"),
+            ("مقدار تغییر", "change_amount"),
+            ("مقدار نهایی", "scenario_value"),
+        )
+    )
+    return (
+        '<article class="multi-review-rule-card primary">'
+        f'<header><h3>{html.escape(str(row.get("indicator") or "—"))}</h3><span>مقدار اختصاصی شعبه اصلی</span></header>'
+        f'<p>{html.escape(str(row.get("method") or "—"))}</p><div class="multi-review-rule-body">{cells}</div></article>'
+    )
+
+
+def _review_section_html(title: str, body: str, css_class: str) -> str:
+    return (
+        f'<section class="multi-review-section {html.escape(css_class)}">'
+        f'<h3>{html.escape(title)}</h3><div class="multi-review-card-grid">{body}</div></section>'
+    )
+
+
 def _general_rule_review_rows(workspace: dict) -> pd.DataFrame:
     return pd.DataFrame([
         {
             "شاخص": INDICATOR_REGISTRY[rule["indicator_key"]].display_name,
             "جهت": _direction_label(rule["direction"]),
             "درصد واردشده": _format_entered_percentage(rule["percentage"], rule["direction"]),
-            "دامنه اعمال": "تمام شعب جامعه رسمی",
+            "دامنه اعمال": "تمام شعب جامعه (کل شعب)",
             "اولویت/منبع": "قاعده عمومی",
         }
         for rule in workspace["general_rules"]
@@ -193,7 +312,7 @@ def _details(workspace: dict, data: pd.DataFrame, actor: ActorContext) -> None:
         if not actor.can_select_primary_branch:
             assigned = resolve_primary_branch(actor, None)
             if assigned not in ids:
-                st.error("شعبه تخصیص‌یافته کاربر در جامعه رسمی رتبه‌بندی وجود ندارد.")
+                st.error("شعبه تخصیص‌یافته کاربر در جامعه (کل شعب) رتبه‌بندی وجود ندارد.")
                 workspace["primary_branch_code"] = None
             else:
                 workspace["primary_branch_code"] = assigned
@@ -229,21 +348,25 @@ def _rule_editor(workspace: dict) -> None:
     occupied = {row["indicator_key"] for row in rules}
     available = [key for key in INDICATOR_REGISTRY if key not in occupied]
     if available:
-        with st.form("multi_general_rule_form", clear_on_submit=True):
-            columns = st.columns([1.6, 1, 1])
+        st.markdown('<div class="multi-compact-form multi-general-rule-form">', unsafe_allow_html=True)
+        with st.form("multi_general_rule_form"):
+            columns = st.columns([1.7, 1.05, 0.95, 1.0])
             indicator = columns[0].selectbox(
                 "شاخص",
                 [None, *available],
                 index=0,
                 format_func=lambda key: "انتخاب شاخص" if key is None else INDICATOR_REGISTRY[key].display_name,
+                key="multi_general_indicator",
             )
             direction = columns[1].radio(
                 "جهت تغییر", ("increase", "decrease"),
                 format_func=lambda value: "افزایش" if value == "increase" else "کاهش",
                 horizontal=True,
+                key="multi_general_direction",
             )
-            percentage_text = columns[2].text_input("درصد تغییر", value="", placeholder="مثلاً 25 یا ۱۲٫۵")
-            submitted = st.form_submit_button("افزودن قاعده عمومی", type="primary")
+            percentage_text = columns[2].text_input("درصد تغییر", value="", placeholder="تکمیل شود", key="multi_general_percentage")
+            submitted = columns[3].form_submit_button("افزودن قاعده", type="primary")
+        st.markdown("</div>", unsafe_allow_html=True)
         if submitted:
             try:
                 if indicator is None:
@@ -264,16 +387,23 @@ def _rule_cards(rules: list[dict], prefix: str, workspace: dict) -> None:
     if not rules:
         st.markdown('<div class="multi-branch-empty">هنوز قاعده‌ای ثبت نشده است.</div>', unsafe_allow_html=True)
         return
+    st.markdown('<section class="multi-rule-list">', unsafe_allow_html=True)
     for index, rule in enumerate(list(rules)):
         direction = "افزایش" if rule["direction"] == "increase" else "کاهش"
-        columns = st.columns([3, 1.2, 1, 0.65])
-        columns[0].markdown(f"**{INDICATOR_REGISTRY[rule['indicator_key']].display_name}**")
-        columns[1].write(direction)
-        columns[2].write(f"{format_persian_number(rule['percentage'], 1)}٪")
-        if columns[3].button("حذف", key=f"{prefix}_delete_{index}"):
+        st.markdown(
+            '<article class="multi-rule-row navy">'
+            f'<strong>{html.escape(INDICATOR_REGISTRY[rule["indicator_key"]].display_name)}</strong>'
+            '<span class="rule-badge">قاعده عمومی</span>'
+            f'<span>{html.escape(direction)}</span>'
+            f'<b dir="ltr">{html.escape(format_persian_number(rule["percentage"], 2).rstrip("۰").rstrip("٫"))}٪</b>'
+            '</article>',
+            unsafe_allow_html=True,
+        )
+        if _delete_button("حذف", f"{prefix}_delete_{index}"):
             rules.pop(index)
             invalidate_multi_branch_result(workspace)
             st.rerun()
+    st.markdown("</section>", unsafe_allow_html=True)
 
 
 def _exceptions(workspace: dict, data: pd.DataFrame) -> None:
@@ -283,38 +413,52 @@ def _exceptions(workspace: dict, data: pd.DataFrame) -> None:
     )
     ids, names = _branch_maps(data)
     exceptions: dict[str, list[dict]] = workspace["branch_exceptions"]
-    with st.form("multi_exception_form", clear_on_submit=True):
-        columns = st.columns([1.6, 1.4, 1, 1])
-        branch = columns[0].selectbox(
-            "شعبه استثنا",
-            [None, *ids],
-            index=0,
-            format_func=lambda item: "انتخاب شعبه" if item is None else branch_select_label(item, names),
-            key="multi_exception_branch",
-        )
-        occupied = set() if branch is None else {row["indicator_key"] for row in exceptions.get(str(branch), [])}
-        available = [key for key in INDICATOR_REGISTRY if key not in occupied]
-        indicator_options = [None, *available] if available else [None]
-        indicator = columns[1].selectbox(
+    branch = st.selectbox(
+        "شعبه استثنا",
+        [None, *ids],
+        index=0,
+        format_func=lambda item: "انتخاب شعبه" if item is None else branch_select_label(item, names),
+        key="multi_exception_branch",
+    )
+    available_exception_indicators = get_available_exception_indicator_keys(
+        list(INDICATOR_REGISTRY), exceptions, branch
+    )
+    indicator_options = [None, *available_exception_indicators] if available_exception_indicators else [None]
+    branch_state_key = str(branch) if branch is not None else ""
+    if st.session_state.get("multi_exception_branch_seen") != branch_state_key:
+        current_indicator = st.session_state.get("multi_exception_indicator")
+        if current_indicator not in indicator_options:
+            st.session_state["multi_exception_indicator"] = None
+        st.session_state["multi_exception_branch_seen"] = branch_state_key
+    with st.form("multi_exception_form"):
+        columns = st.columns([1.4, 1, 1])
+        indicator = columns[0].selectbox(
             "شاخص",
             indicator_options,
             index=0,
             format_func=lambda key: "انتخاب شاخص" if key is None else INDICATOR_REGISTRY[key].display_name,
-            disabled=not available,
+            disabled=not available_exception_indicators,
+            key="multi_exception_indicator",
         )
-        direction = columns[2].radio(
+        direction = columns[1].radio(
             "جهت", ("increase", "decrease"),
             format_func=lambda value: "افزایش" if value == "increase" else "کاهش",
             horizontal=True,
+            key="multi_exception_direction",
         )
-        percentage_text = columns[3].text_input("درصد اختصاصی", value="", placeholder="مثلاً 25 یا ۱۲٫۵")
-        submitted = st.form_submit_button("افزودن استثنا", type="primary", disabled=not available)
+        percentage_text = columns[2].text_input("درصد اختصاصی", value="", placeholder="تکمیل شود", key="multi_exception_percentage")
+        submitted = st.form_submit_button("افزودن استثنا", type="primary", disabled=not available_exception_indicators)
+    general_keys = {rule["indicator_key"] for rule in workspace["general_rules"]}
+    if indicator in general_keys:
+        st.info("این استثنا جایگزین قاعده عمومی خواهد شد.")
     if submitted:
         try:
             if branch is None:
                 raise ValueError("شعبه استثنا را انتخاب کنید.")
             if indicator is None:
                 raise ValueError("شاخص را انتخاب کنید.")
+            if _has_exception_rule(exceptions, branch, indicator):
+                raise ValueError("برای این شعبه و شاخص قبلاً استثنا ثبت شده است.")
             percentage = _parse_percentage_input(percentage_text)
         except ValueError as exc:
             st.error(str(exc))
@@ -340,17 +484,29 @@ def _primary_overrides(workspace: dict, data: pd.DataFrame) -> None:
     )
     branch_code = str(workspace["primary_branch_code"])
     row = data.loc[data[BRANCH_ID].astype(str).eq(branch_code)].iloc[0]
+    st.markdown(
+        '<div class="multi-primary-identity">'
+        f'<strong>شعبه اصلی: {html.escape(str(row[BRANCH_NAME]))}</strong>'
+        f'<span>کد <b dir="ltr">{html.escape(persian_digits(branch_code))}</b></span></div>',
+        unsafe_allow_html=True,
+    )
     overrides: dict[str, dict] = workspace["primary_branch_overrides"]
-    with st.form("multi_primary_override_form", clear_on_submit=True):
+    with st.form("multi_primary_override_form"):
         columns = st.columns([1.5, 1.2, 0.9, 1])
         available = [key for key in INDICATOR_REGISTRY if key not in overrides]
+        indicator_options = [None, *available] if available else [None]
         indicator = columns[0].selectbox(
-            "شاخص شعبه اصلی", available or list(INDICATOR_REGISTRY),
-            format_func=lambda key: INDICATOR_REGISTRY[key].display_name, disabled=not available,
+            "شاخص شعبه اصلی",
+            indicator_options,
+            index=0,
+            format_func=lambda key: "انتخاب شاخص" if key is None else INDICATOR_REGISTRY[key].display_name,
+            disabled=not available,
+            key="multi_primary_indicator",
         )
         mode = columns[1].selectbox(
             "روش ورود", ("percent", "absolute", "final"),
             format_func={"percent": "تغییر درصدی", "absolute": "تغییر مطلق", "final": "مقدار نهایی"}.get,
+            key="multi_primary_mode",
         )
         percent_direction = columns[2].radio(
             "جهت درصدی",
@@ -358,11 +514,14 @@ def _primary_overrides(workspace: dict, data: pd.DataFrame) -> None:
             format_func={"increase": "افزایش", "decrease": "کاهش"}.get,
             horizontal=True,
             disabled=mode != "percent",
+            key="multi_primary_direction",
         )
-        value_text = columns[3].text_input("مقدار", value="0")
+        value_text = columns[3].text_input("مقدار", value="", placeholder="تکمیل شود", key="multi_primary_value")
         submitted = st.form_submit_button("ثبت مقدار شعبه اصلی", type="primary", disabled=not available)
     if submitted:
         try:
+            if indicator is None:
+                raise ValueError("شاخص شعبه اصلی را انتخاب کنید.")
             entered = (
                 _parse_percentage_input(value_text) * _direction_sign(percent_direction)
                 if mode == "percent" else parse_raw_input_value(value_text)
@@ -381,14 +540,8 @@ def _primary_overrides(workspace: dict, data: pd.DataFrame) -> None:
         st.markdown('<div class="multi-branch-empty">ثبت مقدار اختصاصی برای شعبه اصلی اختیاری است.</div>', unsafe_allow_html=True)
     for index, (indicator, item) in enumerate(list(overrides.items())):
         summary = _primary_rule_summary(indicator, item, float(row[indicator]))
-        columns = st.columns([1.6, 1.1, 1.1, 1.1, 1.1, 1.1, 0.65])
-        columns[0].markdown(f"**{summary['indicator']}**")
-        columns[1].write(summary["method"])
-        columns[2].write(summary["entered"])
-        columns[3].write(f"مقدار مبنا: {summary['baseline']}")
-        columns[4].write(f"مقدار تغییر: {summary['change_amount']}")
-        columns[5].write(f"مقدار نهایی: {summary['scenario_value']}")
-        if columns[6].button("حذف", key=f"primary_delete_{index}"):
+        st.markdown(_render_primary_rule_card(summary), unsafe_allow_html=True)
+        if _delete_button("حذف", f"primary_delete_{index}"):
             overrides.pop(indicator)
             invalidate_multi_branch_result(workspace)
             st.rerun()
@@ -427,67 +580,86 @@ def _build_scenario(
 def _review(
     workspace: dict, data: pd.DataFrame, baseline_outputs, actor: ActorContext
 ) -> None:
-    _stage_header(MultiBranchStage.REVIEW, "تعریف سناریو را بازبینی و سپس با موتور رسمی درجه‌بندی اجرا کنید.")
     names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].astype(str).to_dict()
     primary = str(workspace["primary_branch_code"])
     primary_row = data.loc[data[BRANCH_ID].astype(str).eq(primary)].iloc[0]
     exception_rules = sum(len(items) for items in workspace["branch_exceptions"].values())
-    st.markdown('<section class="multi-review-section"><h3>مشخصات سناریو</h3></section>', unsafe_allow_html=True)
-    cards = st.columns(6)
-    cards[0].metric("نام سناریو", str(workspace["scenario_name"]))
-    cards[1].metric("شعبه اصلی", f"{names.get(primary, primary)} ({persian_digits(primary)})")
-    cards[2].metric("جامعه رسمی", f"{format_persian_number(len(data), 0)} شعبه")
-    cards[3].metric("قواعد عمومی", format_persian_number(len(workspace["general_rules"]), 0))
-    cards[4].metric("استثناهای شعب", format_persian_number(exception_rules, 0))
-    cards[5].metric("مقادیر شعبه اصلی", format_persian_number(len(workspace["primary_branch_overrides"]), 0))
+    overview = (
+        '<section class="multi-review-hero"><header><h2>بازبینی نهایی سناریو</h2>'
+        '<p>پیش از اجرای مدل رسمی، دامنه و تمام تغییرات سناریو را کنترل کنید.</p></header>'
+        '<div class="multi-review-overview"><div class="identity">'
+        f'<small>نام سناریو</small><h3>{html.escape(str(workspace["scenario_name"]))}</h3>'
+        f'<span>شعبه اصلی: {html.escape(names.get(primary, primary))}</span>'
+        f'<span>کد شعبه: <b dir="ltr">{html.escape(persian_digits(primary))}</b></span></div>'
+        '<div class="counts">'
+        f'{_review_fact("جامعه (کل شعب)", f"{format_persian_number(len(data), 0)} شعبه")}'
+        f'{_review_fact("قواعد عمومی", format_persian_number(len(workspace["general_rules"]), 0))}'
+        f'{_review_fact("استثناهای شعب", format_persian_number(exception_rules, 0))}'
+        f'{_review_fact("مقادیر شعبه اصلی", format_persian_number(len(workspace["primary_branch_overrides"]), 0))}'
+        '</div></div></section>'
+    )
+    families = (
+        '<section class="multi-review-family-grid">'
+        f'<article class="navy"><b>◎</b><h3>قواعد عمومی</h3>{_ltr_value(format_persian_number(len(workspace["general_rules"]), 0))}<p>قاعده پایه برای جامعه (کل شعب)</p></article>'
+        f'<article class="amber"><b>◇</b><h3>استثناهای شعب</h3>{_ltr_value(format_persian_number(exception_rules, 0))}<p>جایگزین قاعده عمومی در شعب منتخب</p></article>'
+        f'<article class="purple"><b>◉</b><h3>مقادیر اختصاصی شعبه اصلی</h3>{_ltr_value(format_persian_number(len(workspace["primary_branch_overrides"]), 0))}<p>بالاترین اولویت برای شعبه اصلی</p></article>'
+        '</section>'
+    )
+    st.markdown(overview + families, unsafe_allow_html=True)
 
-    st.markdown('<section class="multi-review-section"><h3>قواعد عمومی</h3></section>', unsafe_allow_html=True)
-    general_rows = _general_rule_review_rows(workspace)
-    if general_rows.empty:
-        st.markdown('<div class="multi-branch-empty">قاعده عمومی ثبت نشده است.</div>', unsafe_allow_html=True)
+    if not workspace["general_rules"]:
+        general_body = '<div class="multi-branch-empty">قاعده عمومی ثبت نشده است.</div>'
     else:
-        st.dataframe(general_rows, hide_index=True, width="stretch")
+        general_body = "".join(_render_review_rule_card(rule, len(data)) for rule in workspace["general_rules"])
+    st.markdown(_review_section_html("قواعد عمومی", general_body, "general"), unsafe_allow_html=True)
 
-    st.markdown('<section class="multi-review-section"><h3>استثناهای شعب</h3></section>', unsafe_allow_html=True)
-    exception_rows = _exception_rule_review_rows(workspace, names)
-    if exception_rows.empty:
-        st.markdown('<div class="multi-branch-empty">استثنای شعبه‌ای ثبت نشده است.</div>', unsafe_allow_html=True)
+    general_keys = {rule["indicator_key"] for rule in workspace["general_rules"]}
+    exception_cards = [
+        _render_exception_card(branch_code, rule, names, general_keys)
+        for branch_code, rules in workspace["branch_exceptions"].items()
+        for rule in rules
+    ]
+    if not exception_cards:
+        exception_body = '<div class="multi-branch-empty">استثنای شعبه‌ای ثبت نشده است.</div>'
     else:
-        st.dataframe(exception_rows, hide_index=True, width="stretch")
+        exception_body = "".join(exception_cards)
+    st.markdown(_review_section_html("استثناهای شعب", exception_body, "exception"), unsafe_allow_html=True)
 
-    st.markdown('<section class="multi-review-section"><h3>مقادیر اختصاصی شعبه اصلی</h3></section>', unsafe_allow_html=True)
-    primary_rows = _primary_rule_rows(workspace["primary_branch_overrides"], primary_row)
-    if primary_rows.empty:
-        st.markdown('<div class="multi-branch-empty">مقدار اختصاصی برای شعبه اصلی ثبت نشده است.</div>', unsafe_allow_html=True)
+    primary_cards = [_render_primary_rule_card(row) for row in _primary_rule_rows(workspace["primary_branch_overrides"], primary_row).to_dict("records")]
+    if not primary_cards:
+        primary_body = '<div class="multi-branch-empty">مقدار اختصاصی برای شعبه اصلی ثبت نشده است.</div>'
     else:
-        st.dataframe(primary_rows.rename(columns={
-            "indicator": "شاخص",
-            "method": "روش اعمال",
-            "direction": "جهت",
-            "entered": "درصد/مقدار واردشده",
-            "baseline": "مقدار مبنا",
-            "change_amount": "مقدار تغییر",
-            "scenario_value": "مقدار نهایی سناریو",
-        }).drop(columns=["indicator_key"], errors="ignore"), hide_index=True, width="stretch")
+        primary_body = "".join(primary_cards)
+    st.markdown(_review_section_html("مقادیر اختصاصی شعبه اصلی", primary_body, "primary"), unsafe_allow_html=True)
 
-    st.info("ترتیب اعمال قواعد: مقدار اختصاصی شعبه اصلی ← استثنای شعبه ← قاعده عمومی ← مقدار مبنا. در صورت هم‌پوشانی، قاعده اختصاصی‌تر اعمال می‌شود؛ یعنی مقدار اختصاصی شعبه اصلی بر استثنا و قاعده عمومی تقدم دارد.")
-    if st.button("اجرای سناریو با مدل رسمی", type="primary", width="stretch"):
-        try:
-            scenario = _build_scenario(workspace, len(data), actor)
-            resolved = MultiBranchRuleResolver.resolve(scenario, data)
-            scenario_outputs = run_ranking_model(resolved.scenario_data)
-            comparison = compare_model_outputs(baseline_outputs, scenario_outputs)
-        except (ValueError, MultiBranchRuleValidationError) as exc:
-            st.error(str(exc))
-        else:
-            workspace["execution_result"] = {
-                "scenario": scenario,
-                "resolved": resolved,
-                "outputs": scenario_outputs,
-                "comparison": comparison,
-            }
-            workspace["show_result"] = True
-            st.rerun()
+    st.markdown(
+        '<section class="multi-precedence"><div><span>مقدار مبنا</span><i>←</i><span>قاعده عمومی</span><i>←</i><span>استثنای شعبه</span><i>←</i><span>مقدار اختصاصی شعبه اصلی</span></div>'
+        '<p>در صورت وجود چند قاعده برای یک شاخص، مقدار اختصاصی شعبه اصلی بالاترین اولویت را دارد؛ سپس استثنای شعبه، قاعده عمومی و در نهایت مقدار مبنا اعمال می‌شود.</p></section>'
+        '<div class="multi-execution-bar"></div>',
+        unsafe_allow_html=True,
+    )
+    actions = st.columns([1.2, 1.8, 4])
+    if actions[0].button("بازگشت و ویرایش", width="stretch"):
+        move_to_multi_branch_stage(workspace, MultiBranchStage.PRIMARY_BRANCH_OVERRIDES)
+        st.rerun()
+    with actions[1]:
+        if st.button("اجرای سناریو با مدل رسمی", type="primary", width="stretch"):
+            try:
+                scenario = _build_scenario(workspace, len(data), actor)
+                resolved = MultiBranchRuleResolver.resolve(scenario, data)
+                scenario_outputs = run_ranking_model(resolved.scenario_data)
+                comparison = compare_model_outputs(baseline_outputs, scenario_outputs)
+            except (ValueError, MultiBranchRuleValidationError) as exc:
+                st.error(str(exc))
+            else:
+                workspace["execution_result"] = {
+                    "scenario": scenario,
+                    "resolved": resolved,
+                    "outputs": scenario_outputs,
+                    "comparison": comparison,
+                }
+                workspace["show_result"] = True
+                st.rerun()
 
 
 def _persistence_error(exc: Exception) -> None:
@@ -510,8 +682,13 @@ def _save_draft(
     except Exception as exc:
         _persistence_error(exc)
     else:
-        action = "نسخه جدید" if save_as_new else "پیش‌نویس"
-        st.success(f"{action} با موفقیت ذخیره شد (نسخه {record.row_version}).")
+        st.session_state["saved_scenarios_refresh_token"] = record.updated_at.isoformat()
+        messages = {
+            "created": "سناریو با موفقیت ذخیره شد.",
+            "updated": "تغییرات سناریو با موفقیت به‌روزرسانی شد.",
+            "version": "نسخه جدید سناریو با موفقیت ایجاد شد.",
+        }
+        st.success(f"{messages.get(workspace.get('last_save_action'), 'سناریو با موفقیت ذخیره شد.')} (نسخه {record.row_version})")
 
 
 def _persistence_bar(workspace: dict, service: MultiBranchWorkspaceService) -> None:
@@ -558,7 +735,7 @@ def _result(
         context={
             "نام سناریو": scenario.scenario_name,
             "وضعیت اجرا": "اجرا شده",
-            "جامعه رسمی": f"{format_persian_number(scenario.population_definition.expected_branch_count, 0)} شعبه",
+            "جامعه (کل شعب)": f"{format_persian_number(scenario.population_definition.expected_branch_count, 0)} شعبه",
             "شعبه اصلی": f"{primary_name} ({persian_digits(scenario.primary_branch_code)})",
             "قواعد عمومی": format_persian_number(len(scenario.general_rules), 0),
             "استثناهای شعب": format_persian_number(exception_rules, 0),
@@ -574,6 +751,7 @@ def _result(
         except Exception as exc:
             _persistence_error(exc)
         else:
+            st.session_state["saved_scenarios_refresh_token"] = record.updated_at.isoformat()
             st.success(f"نتیجه رسمی ذخیره شد (نسخه رکورد {record.row_version}).")
     if actions[1].button("بازگشت و ویرایش", width="stretch"):
         workspace["show_result"] = False
@@ -607,7 +785,7 @@ def _persisted_result(workspace: dict, data: pd.DataFrame) -> None:
         context={
             "نام سناریو": workspace["scenario_name"],
             "وضعیت اجرا": "نتیجه رسمی ذخیره‌شده",
-            "جامعه رسمی": f"{format_persian_number(len(results), 0)} شعبه",
+            "جامعه (کل شعب)": f"{format_persian_number(len(results), 0)} شعبه",
             "شعبه اصلی": f"{names.get(primary, '—')} ({persian_digits(primary)})" if primary else "—",
             "قواعد عمومی": format_persian_number(len(workspace.get("general_rules") or []), 0),
             "استثناهای شعب": format_persian_number(sum(len(items) for items in (workspace.get("branch_exceptions") or {}).values()), 0),
@@ -632,6 +810,8 @@ def _can_advance(stage: MultiBranchStage, workspace: dict) -> tuple[bool, str | 
 
 
 def _navigation(stage: MultiBranchStage, workspace: dict) -> None:
+    if stage is MultiBranchStage.REVIEW:
+        return
     index = MULTI_BRANCH_STAGE_ORDER.index(stage)
     columns = st.columns([1.2, 1.2, 5])
     if columns[0].button("مرحله بعد", type="primary", disabled=index == len(MULTI_BRANCH_STAGE_ORDER) - 1, width="stretch"):
@@ -656,6 +836,7 @@ def render_multi_branch_workspace(
     workspace = initialize_multi_branch_state(st.session_state)
     actor = _actor_context(current_user)
     st.markdown('<div class="multi-branch-page" data-multi-branch-page="true">', unsafe_allow_html=True)
+    _scroll_to_top_once(workspace)
     st.markdown(
         '<header class="scenario-builder-header"><span class="scenario-builder-header-icon">'
         f'{icon_svg("buildings")}</span><div><h1>سناریوی چندشعبه‌ای</h1>'

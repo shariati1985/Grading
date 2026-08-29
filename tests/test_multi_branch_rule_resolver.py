@@ -95,6 +95,51 @@ def test_exception_only_replaces_same_indicator_and_is_not_cumulative() -> None:
     assert _manifest(result, "202", "avg_loans").scenario_value == pytest.approx(240.0)
 
 
+def test_same_exception_indicator_applies_independently_per_branch() -> None:
+    scenario = _scenario(
+        general_rules=(PercentageRule("avg_loans", PercentageDirection.INCREASE, 20.0),),
+        branch_exceptions=(
+            BranchException("101", (PercentageRule("avg_loans", PercentageDirection.INCREASE, 10.0),)),
+            BranchException("202", (PercentageRule("avg_loans", PercentageDirection.DECREASE, 5.0),)),
+        ),
+    )
+
+    result = MultiBranchRuleResolver.resolve(scenario, _baseline())
+
+    assert _manifest(result, "101", "avg_loans").scenario_value == pytest.approx(110.0)
+    assert _manifest(result, "101", "avg_loans").effective_source is EffectiveChangeSource.BRANCH_EXCEPTION
+    assert _manifest(result, "202", "avg_loans").scenario_value == pytest.approx(190.0)
+    assert _manifest(result, "202", "avg_loans").effective_source is EffectiveChangeSource.BRANCH_EXCEPTION
+    assert _manifest(result, "303", "avg_loans").scenario_value == pytest.approx(360.0)
+    assert _manifest(result, "303", "avg_loans").effective_source is EffectiveChangeSource.GENERAL_RULE
+
+
+def test_duplicate_exception_pair_is_rejected_but_cross_branch_same_indicator_is_allowed() -> None:
+    allowed = _scenario(
+        branch_exceptions=(
+            BranchException("101", (PercentageRule("avg_loans", PercentageDirection.INCREASE, 10.0),)),
+            BranchException("202", (PercentageRule("avg_loans", PercentageDirection.INCREASE, 15.0),)),
+        ),
+    )
+    MultiBranchRuleResolver.resolve(allowed, _baseline())
+
+    duplicate_pair = _scenario(
+        branch_exceptions=(
+            BranchException(
+                "101",
+                (
+                    PercentageRule("avg_loans", PercentageDirection.INCREASE, 10.0),
+                    PercentageRule("avg_loans", PercentageDirection.DECREASE, 5.0),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(MultiBranchRuleValidationError) as error:
+        MultiBranchRuleResolver.resolve(duplicate_pair, _baseline())
+
+    assert "DUPLICATE_RULE:EXCEPTION:101:avg_loans" in error.value.issues
+
+
 def test_submitted_non_zero_percentage_is_preserved_and_applied() -> None:
     scenario = _scenario(
         general_rules=(PercentageRule("avg_deposits", PercentageDirection.INCREASE, 25.0),)

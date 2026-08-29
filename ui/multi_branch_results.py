@@ -16,7 +16,6 @@ from engine.indicator_registry import INDICATOR_REGISTRY
 from engine.ranking_engine import BRANCH_ID, BRANCH_NAME
 from ui.charts import (
     build_indicator_impact_chart,
-    build_impact_distribution_chart,
     build_multi_branch_rank_movement_chart,
     render_chart,
 )
@@ -104,10 +103,10 @@ def format_score_display(value: object) -> str:
 def format_rank_movement_label(value: object) -> str:
     movement = int(value)
     if movement > 0:
-        return f"{format_persian_number(movement, 0)} رتبه بهبود"
+        return f"{format_persian_number(movement, 0)} رتبه صعود"
     if movement < 0:
-        return f"{format_persian_number(abs(movement), 0)} رتبه افت"
-    return "بدون تغییر رتبه"
+        return f"{format_persian_number(abs(movement), 0)} رتبه نزول"
+    return "بدون جابه‌جایی"
 
 
 def format_score_change_label(value: object) -> str:
@@ -120,6 +119,25 @@ def format_percentage_display(value: object, decimals: int = 2) -> str:
         return "—"
     rendered = format_persian_percentage(float(number), decimals)
     return rendered.replace("٫۰۰٪", "٪").replace("٫۰٪", "٪")
+
+
+def _value(value: object, css_class: str = "") -> str:
+    class_attr = f' class="{css_class}"' if css_class else ""
+    return f'<strong{class_attr} dir="ltr">{html.escape(str(value))}</strong>'
+
+
+def _metric_item(label: str, value: object, css_class: str = "") -> str:
+    return (
+        f'<div class="multi-metric-item {css_class}">'
+        f"<span>{html.escape(label)}</span>{_value(value)}</div>"
+    )
+
+
+def _compact_metric(label: str, value: object) -> str:
+    return (
+        '<span class="multi-compact-metric">'
+        f'<small>{html.escape(label)}</small>{_value(value)}</span>'
+    )
 
 
 def _grade_change(row: pd.Series) -> int:
@@ -219,7 +237,7 @@ def managerial_conclusion(summary: MultiBranchResultSummary) -> str:
         shape = "اثر سناریو متوازن و بدون غلبه روشن یک جهت است"
     direction = "خالص حرکت رتبه مثبت است" if summary.net_rank_movement > 0 else "خالص حرکت رتبه منفی است" if summary.net_rank_movement < 0 else "خالص حرکت رتبه خنثی است"
     return (
-        f"{shape}؛ {format_persian_percentage(raw_pct, 1)} از جامعه رسمی تغییر مقدار داشته‌اند، "
+        f"{shape}؛ {format_persian_percentage(raw_pct, 1)} از جامعه (کل شعب) تغییر مقدار داشته‌اند، "
         f"{format_persian_percentage(score_pct, 1)} تغییر امتیاز و {format_persian_percentage(rank_pct, 1)} جابه‌جایی رتبه ثبت کرده‌اند. "
         f"{direction} و تغییر درجه در {format_persian_number(grade_extent, 0)} شعبه مشاهده شده است."
     )
@@ -241,11 +259,11 @@ def managerial_conclusion_model(summary: MultiBranchResultSummary) -> dict[str, 
         headline = "اثر سناریو ترکیبی و متوازن است"
         tone = "neutral"
     evidence = [
-        f"پوشش تغییر مقدار: {format_persian_percentage(raw_pct, 1)}",
-        f"تغییر امتیاز: {format_persian_percentage(_pct(summary.score_changed_branches, summary.total_branches), 1)}",
-        f"جابه‌جایی رتبه: {format_persian_percentage(rank_pct, 1)}",
-        f"خالص جهت حرکت رتبه: {format_signed_persian_number(summary.net_rank_movement, 0)}",
-        f"تعداد تغییرات شعبه–شاخص: {format_persian_number(summary.branch_indicator_changes, 0)}",
+        ("پوشش تغییر مقدار", format_persian_percentage(raw_pct, 1)),
+        ("تغییر امتیاز", format_persian_percentage(_pct(summary.score_changed_branches, summary.total_branches), 1)),
+        ("جابه‌جایی رتبه", format_persian_percentage(rank_pct, 1)),
+        ("خالص جهت حرکت رتبه", format_signed_persian_number(summary.net_rank_movement, 0)),
+        ("تعداد تغییرات شعبه–شاخص", format_persian_number(summary.branch_indicator_changes, 0)),
     ]
     return {"headline": headline, "tone": tone, "body": managerial_conclusion(summary), "evidence": evidence}
 
@@ -347,64 +365,127 @@ def compact_branch_table(filtered: pd.DataFrame) -> pd.DataFrame:
 
 
 def result_header_html(context: dict[str, object]) -> str:
-    cards = "".join(
-        f'<article><span>{html.escape(str(label))}</span><strong>{html.escape(str(value))}</strong></article>'
-        for label, value in context.items()
-        if value not in (None, "")
+    scenario = context.get("نام سناریو", "—")
+    primary = context.get("شعبه اصلی", "—")
+    population = context.get("جامعه (کل شعب)", "—")
+    status = context.get("وضعیت اجرا", "اجرا شده")
+    executed = context.get("زمان اجرا", "")
+    strip_keys = ("قواعد عمومی", "استثناهای شعب", "مقادیر اختصاصی شعبه اصلی", "تعداد تغییرات شعبه–شاخص")
+    strip = "".join(
+        _metric_item(label, context.get(label, "—"))
+        for label in strip_keys
+        if context.get(label) not in (None, "")
     )
     return (
-        '<div data-multi-branch-results="true"><header class="multi-results-header">'
-        "<div><h1>نتایج سناریوی چندشعبه‌ای</h1><p>نمای مدیریتی، تحلیل شبکه و ممیزی تغییرات سناریو</p></div></header>"
-        f'<section class="multi-results-metadata">{cards}</section>'
+        '<section class="multi-results-hero" data-multi-branch-results="true">'
+        '<header><div><h1>نتایج سناریوی چندشعبه‌ای</h1>'
+        f'<p><span>نام سناریو</span><strong>{html.escape(str(scenario))}</strong></p></div>'
+        '<div class="multi-results-status">'
+        f'<span class="multi-status-badge">{html.escape(str(status))}</span>'
+        f'<time dir="ltr">{html.escape(str(executed or "—"))}</time></div></header>'
+        '<div class="multi-results-core">'
+        f'{_metric_item("شعبه اصلی", primary, "identity")}'
+        f'{_metric_item("جامعه (کل شعب)", population)}'
+        '</div>'
+        f'<div class="multi-results-metadata">{strip}</div></section>'
     )
 
 
 def _render_kpi(label: str, count: object, total: int | None = None, tone: str = "neutral") -> str:
-    sub = "" if total is None else f"<small>{format_persian_percentage(_pct(int(count), total), 1)} از جامعه رسمی</small>"
-    return f'<article class="multi-kpi {tone}"><span>{label}</span><strong>{format_persian_number(count, 0)}</strong>{sub}</article>'
-
-
-def _render_overview(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...]) -> None:
-    summary = summarize_network(table, manifest)
-    conclusion = managerial_conclusion_model(summary)
-    evidence = "".join(f"<li>{html.escape(item)}</li>" for item in conclusion["evidence"])
-    st.markdown(
-        f'<section class="managerial-conclusion {conclusion["tone"]}"><h2>{html.escape(str(conclusion["headline"]))}</h2>'
-        f'<p>{html.escape(str(conclusion["body"]))}</p><ul>{evidence}</ul></section>',
-        unsafe_allow_html=True,
+    sub = "" if total is None else f"<small>{format_persian_percentage(_pct(int(count), total), 1)} از جامعه (کل شعب)</small>"
+    icons = {
+        "شعب دارای تغییر مقدار": "◦",
+        "شعب دارای تغییر امتیاز": "◆",
+        "شعب دارای جابه‌جایی رتبه": "↕",
+        "تغییر درجه": "◇",
+    }
+    return (
+        f'<article class="multi-kpi {tone}">'
+        f'<i aria-hidden="true">{html.escape(icons.get(label, "•"))}</i>'
+        f'<span>{html.escape(label)}</span>'
+        f'<strong dir="ltr">{format_persian_number(count, 0)}</strong>'
+        f'{sub}<em>نتیجه محاسبه‌شده</em></article>'
     )
-    kpis = [
-        _render_kpi("جامعه رسمی", summary.total_branches),
-        _render_kpi("شعب دارای تغییر مقدار", summary.raw_changed_branches, summary.total_branches),
-        _render_kpi("شعب دارای تغییر امتیاز", summary.score_changed_branches, summary.total_branches),
-        _render_kpi("شعب دارای جابه‌جایی رتبه", summary.rank_moved_branches, summary.total_branches),
-        _render_kpi("خالص جهت حرکت", summary.net_rank_movement, None, "success" if summary.net_rank_movement > 0 else "danger" if summary.net_rank_movement < 0 else "neutral"),
-        f'<article class="multi-kpi"><span>تغییر درجه</span><strong>{format_persian_number(summary.grade_up, 0)} / {format_persian_number(summary.grade_down, 0)}</strong><small>بهبود درجه / افت درجه</small></article>',
+
+
+def _distribution_row(label: str, count: int, total: int, tone: str) -> str:
+    percent = _pct(count, total)
+    width = 0 if count == 0 else max(4.0, min(100.0, percent))
+    return (
+        f'<div class="multi-distribution-row {tone}">'
+        f'<span>{html.escape(label)}</span>'
+        '<div class="multi-distribution-bar" aria-hidden="true">'
+        f'<i style="width:{width:.2f}%"></i></div>'
+        f'<b dir="ltr">{format_persian_number(count, 0)}</b>'
+        f'<small dir="ltr">{format_persian_percentage(percent, 1)}</small></div>'
+    )
+
+
+def _distribution_panel_html(title: str, rows: list[tuple[str, int, str]], total: int) -> str:
+    return (
+        '<section class="multi-distribution-panel">'
+        f'<header><i aria-hidden="true">◇</i><div><h3>{html.escape(title)}</h3>'
+        f'<p>{format_persian_number(total, 0)} شعبه</p></div></header>'
+        + "".join(_distribution_row(label, count, max(1, total), tone) for label, count, tone in rows)
+        + "</section>"
+    )
+
+
+def _distribution_grid_html(summary: MultiBranchResultSummary) -> str:
+    rank_rows = [
+        ("صعود رتبه", summary.rank_up, "success"),
+        ("نزول رتبه", summary.rank_down, "danger"),
+        ("بدون جابه‌جایی", summary.rank_same, "neutral"),
     ]
-    st.markdown('<section class="multi-kpi-grid">' + "".join(kpis) + "</section>", unsafe_allow_html=True)
-    render_chart(build_impact_distribution_chart(summary), key="multi_impact_distribution")
-    st.markdown('<section class="multi-movers-grid">' + _movers_panel_html("بیشترین بهبودها", top_movers(table, improvement=True), True) + _movers_panel_html("بیشترین افت‌ها", top_movers(table, improvement=False), False) + "</section>", unsafe_allow_html=True)
+    grade_rows = [
+        ("بهبود درجه", summary.grade_up, "success"),
+        ("افت درجه", summary.grade_down, "danger"),
+        ("بدون تغییر درجه", summary.grade_same, "neutral"),
+    ]
+    return (
+        '<section class="multi-distribution-grid" data-multi-branch-results="true">'
+        + _distribution_panel_html("توزیع جابه‌جایی رتبه", rank_rows, summary.total_branches)
+        + _distribution_panel_html("توزیع تغییر درجه", grade_rows, summary.total_branches)
+        + "</section>"
+    )
+
+
+def _render_overview(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...], primary_branch_code: str) -> None:
+    summary = summarize_network(table, manifest)
+    kpis = [
+        _render_kpi("شعب دارای تغییر مقدار", summary.raw_changed_branches, summary.total_branches, "navy"),
+        _render_kpi("شعب دارای تغییر امتیاز", summary.score_changed_branches, summary.total_branches, "purple"),
+        _render_kpi("شعب دارای جابه‌جایی رتبه", summary.rank_moved_branches, summary.total_branches, "success" if summary.rank_up >= summary.rank_down else "danger"),
+        _render_kpi("تغییر درجه", summary.grade_up + summary.grade_down, summary.total_branches, "purple"),
+    ]
+    st.markdown('<section class="multi-kpi-grid" data-multi-branch-results="true">' + "".join(kpis) + "</section>", unsafe_allow_html=True)
+    _render_primary(table, manifest, primary_branch_code)
+    st.markdown(_distribution_grid_html(summary), unsafe_allow_html=True)
+    st.markdown('<section class="multi-movers-grid" data-multi-branch-results="true">' + _movers_panel_html("بیشترین صعود", top_movers(table, improvement=True, limit=3), True) + _movers_panel_html("بیشترین نزول", top_movers(table, improvement=False, limit=3), False) + "</section>", unsafe_allow_html=True)
 
 
 def _movers_panel_html(title: str, data: pd.DataFrame, improvement: bool) -> str:
+    tone = "success" if improvement else "danger"
     if data.empty:
         empty = "شعبه‌ای با بهبود رتبه ثبت نشده است." if improvement else "شعبه‌ای با افت رتبه ثبت نشده است."
-        return f'<section class="multi-mover-panel"><h3>{title}</h3><div class="multi-empty-state">{empty}</div></section>'
+        return f'<section class="multi-mover-panel {tone}"><header><i aria-hidden="true">↕</i><div><h3>{title}</h3><p>بدون شعبه واجد شرایط</p></div></header><div class="multi-empty-state">{empty}</div></section>'
     rows = []
-    for _, row in data.iterrows():
-        tone = "success" if improvement else "danger"
-        grade = ""
-        if row["grade_change"] != 0:
-            grade = f"<span>{'بهبود درجه' if row['grade_change'] > 0 else 'افت درجه'}: {format_grade(row['baseline_grade'])} / {format_grade(row['scenario_grade'])}</span>"
+    for pos, (_, row) in enumerate(data.iterrows(), start=1):
         rows.append(
-            f'<article class="multi-mover-row {tone}"><header><strong>{html.escape(str(row[BRANCH_NAME]))}</strong>'
-            f'<small>کد {persian_digits(row[BRANCH_ID])}</small></header><div>'
-            f'<span>رتبه فعلی: {format_persian_number(row["baseline_rank"], 0)}</span>'
-            f'<span>رتبه سناریویی: {format_persian_number(row["scenario_rank"], 0)}</span>'
-            f'<b>{format_rank_movement_label(row["rank_change"])}</b>'
-            f'<span>تغییر امتیاز: {format_score_change_label(row["score_change"])}</span>{grade}</div></article>'
+            f'<article class="multi-mover-row {tone}"><b class="position" dir="ltr">{format_persian_number(pos, 0)}</b>'
+            f'<div class="mover-name"><strong>{html.escape(str(row[BRANCH_NAME]))}</strong>'
+            f'<small>کد <span dir="ltr">{html.escape(persian_digits(row[BRANCH_ID]))}</span></small></div>'
+            f'{_compact_metric("رتبه فعلی", format_persian_number(row["baseline_rank"], 0))}'
+            f'{_compact_metric("رتبه سناریویی", format_persian_number(row["scenario_rank"], 0))}'
+            f'<span class="movement-badge">{format_rank_movement_label(row["rank_change"])}</span>'
+            f'<span class="score-change" dir="ltr">{format_score_change_label(row["score_change"])}</span></article>'
         )
-    return f'<section class="multi-mover-panel"><h3>{title}</h3>{"".join(rows)}</section>'
+    return (
+        f'<section class="multi-mover-panel {tone}"><header><i aria-hidden="true">↕</i><div>'
+        f'<h3>{title}</h3><p>{format_persian_number(len(data), 0)} شعبه از بیشترین جابه‌جایی‌ها</p></div></header>'
+        + "".join(rows)
+        + "</section>"
+    )
 
 
 def _render_primary(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...], primary_branch_code: str) -> None:
@@ -412,11 +493,7 @@ def _render_primary(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...], 
     if row is None:
         st.warning("اطلاعات شعبه اصلی در نتیجه موجود نیست.")
         return
-    st.markdown(_primary_panel_html(row, primary_branch_code), unsafe_allow_html=True)
-    if changes.empty:
-        st.info("برای شعبه اصلی تغییر مقدار مؤثری ثبت نشده است.")
-    else:
-        st.dataframe(_audit_display(changes), hide_index=True, width="stretch", height=220)
+    st.markdown(_primary_outcome_html(row, changes, primary_branch_code), unsafe_allow_html=True)
 
 
 def _audit_display(audit: pd.DataFrame) -> pd.DataFrame:
@@ -434,49 +511,163 @@ def _audit_display(audit: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+def _primary_metric_card(title: str, cells: str, tone: str = "neutral") -> str:
+    return f'<article class="multi-primary-metric-card {tone}"><h3>{html.escape(title)}</h3><div>{cells}</div></article>'
+
+
 def _primary_panel_html(row: pd.Series, primary_branch_code: str) -> str:
-    items = [
-        ("امتیاز فعلی", format_score_display(row["baseline_score"])),
-        ("امتیاز سناریویی", format_score_display(row["scenario_score"])),
-        ("تغییر امتیاز", format_score_change_label(row["score_change"])),
-        ("رتبه فعلی", format_persian_number(row["baseline_rank"], 0)),
-        ("رتبه سناریویی", format_persian_number(row["scenario_rank"], 0)),
-        ("جابه‌جایی رتبه", format_rank_movement_label(row["rank_change"])),
-        ("درجه فعلی", format_grade(row["baseline_grade"])),
-        ("درجه سناریویی", format_grade(row["scenario_grade"])),
-        ("قواعد مؤثر", format_persian_number(row["changed_indicator_count"], 0)),
-    ]
-    cards = "".join(f"<span><small>{label}</small><b>{value}</b></span>" for label, value in items)
+    score = (
+        _metric_item("امتیاز فعلی", format_score_display(row["baseline_score"]))
+        + _metric_item("امتیاز سناریویی", format_score_display(row["scenario_score"]))
+        + _metric_item("تغییر امتیاز", format_score_change_label(row["score_change"]))
+    )
+    rank = (
+        _metric_item("رتبه فعلی", format_persian_number(row["baseline_rank"], 0))
+        + _metric_item("رتبه سناریویی", format_persian_number(row["scenario_rank"], 0))
+        + _metric_item("حرکت", format_rank_movement_label(row["rank_change"]))
+    )
+    grade = (
+        _metric_item("فعلی", format_grade(row["baseline_grade"]))
+        + _metric_item("سناریو", format_grade(row["scenario_grade"]))
+        + _metric_item("نتیجه", "بهبود درجه" if row["grade_change"] > 0 else "افت درجه" if row["grade_change"] < 0 else "بدون تغییر درجه")
+    )
+    score_tone = "success" if row["score_change"] > 0 else "danger" if row["score_change"] < 0 else "neutral"
+    rank_tone = "success" if row["rank_change"] > 0 else "danger" if row["rank_change"] < 0 else "neutral"
+    grade_tone = "success" if row["grade_change"] > 0 else "danger" if row["grade_change"] < 0 else "neutral"
+    cards = (
+        _primary_metric_card("امتیاز", score, score_tone)
+        + _primary_metric_card("رتبه", rank, rank_tone)
+        + _primary_metric_card("درجه", grade, grade_tone)
+    )
     return (
-        f'<section class="multi-primary-panel"><header><h2>نتیجه شعبه اصلی</h2>'
-        f'<p>{html.escape(str(row[BRANCH_NAME]))} · کد {html.escape(persian_digits(primary_branch_code))}</p></header>'
-        f"<div>{cards}</div></section>"
+        f'<header><h2><span aria-hidden="true">◆</span> نتیجه شعبه اصلی</h2>'
+        '<div>'
+        f'<p>{html.escape(str(row[BRANCH_NAME]))} — کد <span dir="ltr">{html.escape(persian_digits(primary_branch_code))}</span></p>'
+        f'<b class="primary-rule-count">{format_persian_number(row["changed_indicator_count"], 0)} قاعده مؤثر</b></div></header>'
+        f'<div class="multi-primary-comparison">{cards}</div>'
+    )
+
+
+def _primary_rule_cards_html(changes: pd.DataFrame) -> str:
+    cards = []
+    for _, row in changes.iterrows():
+        cells = "".join([
+            _metric_item("ورودی کاربر", format_raw_display(row["entered_value"])),
+            _metric_item("مقدار مبنا", format_raw_display(row["baseline_raw_value"])),
+            _metric_item("مقدار تغییر", format_raw_display(row["absolute_change"])),
+            _metric_item("مقدار نهایی", format_raw_display(row["scenario_raw_value"])),
+        ])
+        cards.append(
+            '<article class="multi-primary-rule-card">'
+            f'<header><h3>{html.escape(str(row["indicator_display_name"]))}</h3>'
+            '<span>مقدار اختصاصی شعبه اصلی</span></header>'
+            f'<p>{html.escape(str(row["input_mode_text"]))}</p><div>{cells}</div></article>'
+        )
+    return '<section class="multi-primary-rules-grid">' + "".join(cards) + "</section>"
+
+
+def _primary_outcome_html(row: pd.Series, changes: pd.DataFrame, primary_branch_code: str) -> str:
+    rules = (
+        '<div class="multi-empty-state compact">برای شعبه اصلی تغییر مقدار مؤثری ثبت نشده است.</div>'
+        if changes.empty
+        else _primary_rule_cards_html(changes)
+    )
+    return (
+        '<section class="multi-primary-panel" data-multi-branch-results="true">'
+        + _primary_panel_html(row, primary_branch_code)
+        + rules
+        + "</section>"
+    )
+
+
+def _branch_detail_cards_html(audit: pd.DataFrame) -> str:
+    cards = []
+    for _, row in audit.iterrows():
+        cards.append(
+            '<article class="multi-branch-detail-card">'
+            f'<header><h3>{html.escape(str(row["indicator_display_name"]))}</h3>'
+            f'<span>{html.escape(str(row["effective_source_text"]))}</span></header>'
+            '<div>'
+            f'{_metric_item("روش", row["input_mode_text"])}'
+            f'{_metric_item("ورودی", format_raw_display(row["entered_value"]))}'
+            f'{_metric_item("مبنا", format_raw_display(row["baseline_raw_value"]))}'
+            f'{_metric_item("سناریو", format_raw_display(row["scenario_raw_value"]))}'
+            f'{_metric_item("تغییر", format_raw_display(row["absolute_change"]))}'
+            f'{_metric_item("درصد تغییر", format_percentage_display(row["percentage_change"]))}'
+            '</div></article>'
+        )
+    return '<section class="multi-branch-detail-grid">' + "".join(cards) + "</section>"
+
+
+def _audit_overview_html(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...], audit_available: bool) -> str:
+    source_count = len({item.effective_source for item in manifest if item.changed})
+    cards = [
+        ("تعداد شعب بررسی‌شده", format_persian_number(len(table), 0), "navy"),
+        ("تعداد تغییرات شعبه–شاخص", format_persian_number(sum(1 for item in manifest if item.changed), 0), "purple"),
+        ("تعداد منابع قواعد مؤثر", format_persian_number(source_count, 0), "navy"),
+        ("وضعیت جزئیات", "کامل" if audit_available else "محدود", "amber" if not audit_available else "success"),
+    ]
+    return (
+        '<section class="multi-audit-overview" data-multi-branch-results="true">'
+        + "".join(
+            f'<article class="{tone}"><span>{html.escape(label)}</span><strong dir="ltr">{html.escape(value)}</strong></article>'
+            for label, value, tone in cards
+        )
+        + "</section>"
+    )
+
+
+def _branch_audit_summary_html(row: pd.Series) -> str:
+    cards = (
+        _metric_item("امتیاز فعلی", format_score_display(row["baseline_score"]))
+        + _metric_item("امتیاز سناریویی", format_score_display(row["scenario_score"]))
+        + _metric_item("تغییر امتیاز", format_score_change_label(row["score_change"]))
+        + _metric_item("رتبه فعلی", format_persian_number(row["baseline_rank"], 0))
+        + _metric_item("رتبه سناریویی", format_persian_number(row["scenario_rank"], 0))
+        + _metric_item("جابه‌جایی", format_rank_movement_label(row["rank_change"]))
+        + _metric_item("درجه فعلی", format_grade(row["baseline_grade"]))
+        + _metric_item("درجه سناریویی", format_grade(row["scenario_grade"]))
+    )
+    return (
+        '<section class="multi-selected-branch-audit" data-multi-branch-results="true">'
+        f'<header><h3>{html.escape(str(row[BRANCH_NAME]))}</h3><span>کد <b dir="ltr">{html.escape(persian_digits(row[BRANCH_ID]))}</b></span></header>'
+        f'<div>{cards}</div></section>'
     )
 
 
 def _render_analysis(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...]) -> None:
     impact = aggregate_indicator_impact(table, manifest)
-    st.markdown("### اثر قواعد به تفکیک شاخص")
+    st.markdown('<section class="multi-analysis-section"><h2>اثر شاخص‌ها</h2>', unsafe_allow_html=True)
     if impact.empty:
         st.info("شاخص تغییریافته‌ای برای تحلیل وجود ندارد.")
     else:
         render_chart(build_indicator_impact_chart(impact), key="multi_indicator_impact")
-        st.dataframe(impact.rename(columns={"indicator_name": "شاخص", "affected_branches": "شعب دارای تغییر مقدار", "affected_percentage": "درصد جامعه", "general_rule_count": "تعداد قاعده عمومی", "exception_rule_count": "تعداد استثنا", "primary_rule_count": "تعداد قاعده شعبه اصلی", "rule_direction": "جهت قاعده", "average_raw_percentage_change": "میانگین درصد تغییر مقدار خام", "associated_average_score_change": "میانگین تغییر امتیاز همراه", "branches_rank_up": "شعب صعودکرده", "branches_rank_down": "شعب نزول‌کرده", "rule_sources": "منابع قواعد"}).drop(columns=["indicator_key"], errors="ignore"), hide_index=True, width="stretch")
-    st.markdown("### جابه‌جایی رتبه شعب")
-    mode = st.radio("نمای جابه‌جایی", ("largest_improvements", "largest_declines", "all_moved"), format_func={"largest_improvements": "بیشترین بهبودها", "largest_declines": "بیشترین افت‌ها", "all_moved": "همه شعب جابه‌جاشده"}.get, horizontal=True)
+    st.markdown("</section>", unsafe_allow_html=True)
+    st.markdown('<section class="multi-analysis-section"><h2>جابه‌جایی رتبه شعب</h2>', unsafe_allow_html=True)
+    mode = st.radio("نمای جابه‌جایی", ("all_moved", "largest_improvements", "largest_declines"), format_func={"largest_improvements": "بیشترین بهبودها", "largest_declines": "بیشترین افت‌ها", "all_moved": "همه جابه‌جا شده"}.get, horizontal=True, key="multi_rank_movement_mode")
     figure = build_multi_branch_rank_movement_chart(table, mode=mode)
     if figure is None:
         st.info("شعبه‌ای با جابه‌جایی رتبه وجود ندارد.")
     else:
         render_chart(figure, key=f"multi_rank_movement_{mode}")
-    st.markdown("### پوشش منبع قاعده")
-    st.dataframe(aggregate_rule_source_coverage(table, manifest).rename(columns={"source_label": "منبع", "affected_branch_count": "تعداد شعب متأثر", "branch_indicator_change_count": "تعداد تغییرات شعبه–شاخص"}).drop(columns=["source_key"], errors="ignore"), hide_index=True, width="stretch")
-    st.markdown("### مقایسه فشرده شعب")
+    st.markdown("</section>", unsafe_allow_html=True)
+    st.markdown('<section class="multi-analysis-section"><h2>مقایسه فشرده شعب</h2>', unsafe_allow_html=True)
     st.dataframe(compact_branch_table(table), hide_index=True, width="stretch", height=360)
+    st.markdown("</section>", unsafe_allow_html=True)
+    with st.expander("پوشش منبع قاعده"):
+        st.dataframe(impact.rename(columns={"indicator_name": "شاخص", "affected_branches": "شعب دارای تغییر مقدار", "affected_percentage": "درصد جامعه", "general_rule_count": "تعداد قاعده عمومی", "exception_rule_count": "تعداد استثنا", "primary_rule_count": "تعداد قاعده شعبه اصلی", "rule_direction": "جهت قاعده", "average_raw_percentage_change": "میانگین درصد تغییر مقدار خام", "associated_average_score_change": "میانگین تغییر امتیاز همراه", "branches_rank_up": "شعب صعودکرده", "branches_rank_down": "شعب نزول‌کرده", "rule_sources": "منابع قواعد"}).drop(columns=["indicator_key"], errors="ignore"), hide_index=True, width="stretch")
+        st.dataframe(aggregate_rule_source_coverage(table, manifest).rename(columns={"source_label": "منبع", "affected_branch_count": "تعداد شعب متأثر", "branch_indicator_change_count": "تعداد تغییرات شعبه–شاخص"}).drop(columns=["source_key"], errors="ignore"), hide_index=True, width="stretch")
 
 
-def _render_details(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...]) -> None:
+def _render_details(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...], *, audit_available: bool = True) -> None:
+    st.markdown(_audit_overview_html(table, manifest, audit_available), unsafe_allow_html=True)
+    if not audit_available:
+        st.markdown(
+            '<section class="multi-audit-warning" data-multi-branch-results="true">جزئیات کامل قواعد برای این Snapshot ذخیره نشده است؛ فقط خلاصه رسمی شعب نمایش داده می‌شود.</section>',
+            unsafe_allow_html=True,
+        )
     changed_indicators = sorted({item.indicator_key for item in manifest if item.changed})
+    st.markdown('<section class="multi-audit-filters" data-multi-branch-results="true"><h3>فیلترهای ممیزی</h3></section>', unsafe_allow_html=True)
     filters = st.columns([1, 1, 1, 1.5])
     status = filters[0].selectbox("وضعیت", list(STATUS_OPTIONS), format_func=STATUS_OPTIONS.get, key="multi_result_status")
     source = filters[1].selectbox("منبع قاعده", list(SOURCE_OPTIONS), format_func=SOURCE_OPTIONS.get, key="multi_result_source")
@@ -488,20 +679,23 @@ def _render_details(table: pd.DataFrame, manifest: tuple[EffectiveChange, ...]) 
     options = filtered[BRANCH_ID].astype(str).tolist()
     if options:
         selected = st.selectbox("انتخاب شعبه برای جزئیات", options, format_func=lambda code: f"{table.loc[table[BRANCH_ID].eq(code), BRANCH_NAME].iloc[0]} ({persian_digits(code)})")
-        st.markdown("### جزئیات تغییرات شعبه منتخب")
+        st.markdown(_branch_audit_summary_html(table.loc[table[BRANCH_ID].eq(selected)].iloc[0]), unsafe_allow_html=True)
         audit = build_audit_long_form(tuple(item for item in manifest if str(item.branch_code) == str(selected) and item.changed))
         if audit.empty:
             st.markdown('<div class="multi-empty-state">برای شعبه منتخب تغییر مقدار مؤثری ثبت نشده است.</div>', unsafe_allow_html=True)
         else:
-            st.dataframe(_audit_display(audit), hide_index=True, width="stretch", height=260)
+            st.markdown(_branch_detail_cards_html(audit), unsafe_allow_html=True)
     with st.expander("مشاهده جزئیات فنی و ممیزی"):
+        st.caption("اسکرول افقی فقط در این جدول ممیزی تفصیلی انتظار می‌رود.")
         audit = build_audit_long_form(manifest)
         if audit.empty:
             st.info("جزئیات ممیزی در این نتیجه ذخیره نشده یا تغییری وجود ندارد.")
         else:
             names = table.set_index(BRANCH_ID)[BRANCH_NAME].astype(str).to_dict()
             audit = audit.assign(branch_name=audit["branch_code"].map(names))
-            st.dataframe(audit.rename(columns={"branch_code": "کد شعبه", "branch_name": "نام شعبه", "indicator_key": "کلید شاخص", "indicator_display_name": "شاخص", "effective_source_text": "منبع قاعده مؤثر", "input_mode_text": "روش ورود", "entered_value": "مقدار واردشده", "effective_percentage": "درصد مؤثر", "baseline_raw_value": "مقدار خام مبنا", "scenario_raw_value": "مقدار خام سناریو", "changed_flag": "پرچم تغییر"}), hide_index=True, width="stretch")
+            display = audit.rename(columns={"branch_code": "کد شعبه", "branch_name": "نام شعبه", "indicator_key": "کلید شاخص", "indicator_display_name": "شاخص", "effective_source_text": "منبع قاعده مؤثر", "input_mode_text": "روش ورود", "entered_value": "مقدار واردشده", "effective_percentage": "درصد مؤثر", "baseline_raw_value": "مقدار خام مبنا", "scenario_raw_value": "مقدار خام سناریو", "changed_flag": "پرچم تغییر"})
+            st.download_button("دریافت CSV ممیزی", display.to_csv(index=False).encode("utf-8-sig"), file_name="multi_branch_audit.csv", mime="text/csv")
+            st.dataframe(display, hide_index=True, width="stretch")
 
 
 def render_multi_branch_results(comparison, manifest, primary_branch_code: str, *, context: dict[str, object] | None = None, audit_available: bool = True) -> None:
@@ -512,12 +706,8 @@ def render_multi_branch_results(comparison, manifest, primary_branch_code: str, 
     st.markdown(result_header_html(context or {}), unsafe_allow_html=True)
     tabs = st.tabs(["نمای مدیریتی", "تحلیل شعب و شاخص‌ها", "جزئیات و ممیزی"])
     with tabs[0]:
-        _render_overview(table, manifest)
-        _render_primary(table, manifest, primary_branch_code)
+        _render_overview(table, manifest, primary_branch_code)
     with tabs[1]:
         _render_analysis(table, manifest if audit_available else ())
     with tabs[2]:
-        if not audit_available:
-            st.warning("جزئیات کامل قواعد و ممیزی برای این نتیجه ذخیره نشده است؛ جدول مدیریتی از Snapshot رسمی نمایش داده می‌شود.")
-        _render_details(table, manifest if audit_available else ())
-    st.markdown("</div>", unsafe_allow_html=True)
+        _render_details(table, manifest if audit_available else (), audit_available=audit_available)

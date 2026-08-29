@@ -334,12 +334,13 @@ class SQLiteScenarioRepository:
             connection.execute(
                 "DELETE FROM scenario_change WHERE scenario_id = ?", (updated.scenario_id,)
             )
-            connection.execute(
-                "DELETE FROM scenario_result_summary WHERE scenario_id = ?",
-                (updated.scenario_id,),
-            )
             self._insert_changes(connection, updated.scenario_id, changes)
-            self._insert_results(connection, updated.scenario_id, result_summaries or [])
+            if result_summaries is not None:
+                connection.execute(
+                    "DELETE FROM scenario_result_summary WHERE scenario_id = ?",
+                    (updated.scenario_id,),
+                )
+                self._insert_results(connection, updated.scenario_id, result_summaries)
             self._audit(
                 connection,
                 updated.scenario_id,

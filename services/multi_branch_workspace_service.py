@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import re
+import unicodedata
 from typing import Any
 from uuid import uuid4
 
@@ -27,6 +29,31 @@ STAGE_VALUES = {
     "primary_branch_overrides",
     "review",
 }
+
+
+def normalize_multi_branch_scenario_name(value: object) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    normalized = normalized.replace("ي", "ی").replace("ك", "ک")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def normalize_branch_code(value: object) -> str:
+    return str(value or "").strip()
+
+
+def multi_branch_logical_key(record: ScenarioRecord) -> tuple[str, str, str, str] | None:
+    if record.summary.get("scenario_type") != SCENARIO_TYPE:
+        return None
+    definition = dict(record.summary.get(DEFINITION_KEY) or {})
+    primary = definition.get("primary_branch_code")
+    if primary is None and record.selected_branch_ids:
+        primary = record.selected_branch_ids[0]
+    return (
+        record.owner_user_id,
+        SCENARIO_TYPE,
+        normalize_multi_branch_scenario_name(record.scenario_name),
+        normalize_branch_code(primary),
+    )
 
 
 def _new_workspace() -> dict[str, Any]:
@@ -131,6 +158,21 @@ class MultiBranchWorkspaceService:
             ),
         }
 
+    def _find_existing_logical_record(self, workspace: dict[str, Any]) -> ScenarioRecord | None:
+        candidate = (
+            self.management.current_user.user_id,
+            SCENARIO_TYPE,
+            normalize_multi_branch_scenario_name(workspace.get("scenario_name")),
+            normalize_branch_code(workspace.get("primary_branch_code")),
+        )
+        matches = [
+            item for item in self.management.list_visible(limit=100)
+            if multi_branch_logical_key(item) == candidate
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda item: (item.updated_at, item.created_at, item.scenario_id))
+
     @classmethod
     def _summary(
         cls, workspace: dict[str, Any], *, new_version: bool = False
@@ -140,6 +182,22 @@ class MultiBranchWorkspaceService:
             DEFINITION_KEY: serialize_multi_branch_workspace(workspace),
             "phase3b_lineage": cls._lineage(workspace, new_version=new_version),
         }
+
+    def _summary_with_existing_result_state(
+        self, workspace: dict[str, Any], *, new_version: bool = False
+    ) -> dict[str, Any]:
+        summary = self._summary(workspace, new_version=new_version)
+        persisted = dict(workspace.get("persistence") or {})
+        scenario_id = persisted.get("scenario_id")
+        if scenario_id:
+            try:
+                existing, _, results = self.management.load_scenario(str(scenario_id))
+            except Exception:
+                existing = None
+                results = []
+            if results or (existing is not None and existing.summary.get("has_saved_result")):
+                summary["has_saved_result"] = True
+        return summary
 
     @staticmethod
     def _store_identity(workspace: dict[str, Any], record: ScenarioRecord) -> None:
@@ -167,7 +225,16 @@ class MultiBranchWorkspaceService:
         self, workspace: dict[str, Any], *, save_as_new: bool = False
     ) -> ScenarioRecord:
         persisted = dict(workspace.get("persistence") or {})
-        create_version = save_as_new or persisted.get("status") == "executed"
+        existing = None if persisted.get("scenario_id") else self._find_existing_logical_record(workspace)
+        if existing is not None:
+            persisted = {
+                **persisted,
+                "scenario_id": existing.scenario_id,
+                "row_version": existing.row_version,
+                "version_number": int(dict(existing.summary.get("phase3b_lineage") or {}).get("version_number") or 1),
+            }
+            workspace["persistence"] = persisted
+        save_action = "version" if save_as_new else "updated" if persisted.get("scenario_id") else "created"
         record = self.management.save_draft(
             scenario_name=str(workspace.get("scenario_name") or ""),
             baseline_period=str(workspace.get("period") or ""),
@@ -176,12 +243,13 @@ class MultiBranchWorkspaceService:
                 if workspace.get("primary_branch_code") else []
             ),
             changes=[],
-            summary=self._summary(workspace, new_version=create_version),
+            summary=self._summary_with_existing_result_state(workspace, new_version=save_as_new),
             scenario_id=persisted.get("scenario_id"),
             expected_row_version=persisted.get("row_version"),
-            save_as_new=create_version,
+            save_as_new=False,
         )
         self._store_identity(workspace, record)
+        workspace["last_save_action"] = save_action
         return record
 
     @staticmethod
@@ -212,14 +280,25 @@ class MultiBranchWorkspaceService:
         if not result:
             raise ValueError("نتیجه رسمی اجرا برای ذخیره در دسترس نیست.")
         persisted = dict(workspace.get("persistence") or {})
+        existing = None if persisted.get("scenario_id") else self._find_existing_logical_record(workspace)
+        if existing is not None:
+            persisted = {
+                **persisted,
+                "scenario_id": existing.scenario_id,
+                "row_version": existing.row_version,
+                "version_number": int(dict(existing.summary.get("phase3b_lineage") or {}).get("version_number") or 1),
+            }
+            workspace["persistence"] = persisted
         comparison: ScenarioComparison = result["comparison"]
+        summary = self._summary(workspace)
+        summary["has_saved_result"] = True
         record = self.management.save_executed(
             scenario_name=str(workspace.get("scenario_name") or ""),
             baseline_period=str(workspace.get("period") or ""),
             selected_branch_ids=data[BRANCH_ID].astype(str).tolist(),
             changes=self._changes(result["resolved"].manifest, data),
             comparison=comparison,
-            summary=self._summary(workspace),
+            summary=summary,
             scenario_id=persisted.get("scenario_id"),
             expected_row_version=persisted.get("row_version"),
         )
@@ -241,3 +320,10 @@ class MultiBranchWorkspaceService:
         workspace["show_persisted_result"] = record.status == "executed" and bool(results)
         self._store_identity(workspace, record)
         return LoadedMultiBranchWorkspace(record, workspace, tuple(results), warnings)
+
+    def create_new_version(self, scenario_id: str, *, branch_ids: list[str]) -> ScenarioRecord:
+        loaded = self.load(scenario_id, branch_ids=branch_ids)
+        return self.save_draft(loaded.workspace, save_as_new=True)
+
+    def delete_scenario(self, scenario_id: str, row_version: int) -> None:
+        self.management.delete_scenario(scenario_id, row_version)

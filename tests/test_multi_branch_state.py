@@ -6,6 +6,7 @@ from ui.multi_branch_state import (
     MULTI_BRANCH_STAGE_ORDER,
     MULTI_BRANCH_STATE_KEY,
     MultiBranchStage,
+    consume_scroll_to_top,
     current_multi_branch_stage,
     initialize_multi_branch_state,
     move_to_multi_branch_stage,
@@ -19,10 +20,16 @@ import pandas as pd
 from engine.indicator_registry import INDICATOR_REGISTRY
 from ui.multi_branch_page import (
     _build_scenario,
+    _exception_indicator_options,
     _exception_rule_review_rows,
     _general_rule_review_rows,
+    _has_exception_rule,
     _parse_percentage_input,
     _primary_rule_rows,
+    _render_exception_card,
+    _render_primary_rule_card,
+    _render_review_rule_card,
+    get_available_exception_indicator_keys,
 )
 
 
@@ -82,6 +89,24 @@ def test_workflow_prevents_skipping_entry_stages() -> None:
     assert current_multi_branch_stage(workspace) is MultiBranchStage.REVIEW
 
 
+def test_stage_navigation_sets_and_consumes_one_shot_scroll_flag() -> None:
+    workspace = new_multi_branch_workspace()
+
+    move_to_multi_branch_stage(workspace, MultiBranchStage.GENERAL_RULES)
+
+    assert consume_scroll_to_top(workspace) is True
+    assert consume_scroll_to_top(workspace) is False
+
+
+def test_same_step_state_invalidation_does_not_set_scroll_flag() -> None:
+    from ui.multi_branch_state import invalidate_multi_branch_result
+
+    workspace = new_multi_branch_workspace()
+    invalidate_multi_branch_result(workspace)
+
+    assert consume_scroll_to_top(workspace) is False
+
+
 def test_starting_new_multi_branch_scenario_discards_previous_workspace() -> None:
     state = {MULTI_BRANCH_STATE_KEY: {"scenario_name": "قبلی"}}
     start_new_scenario(state, ScenarioType.MULTI_BRANCH)
@@ -132,6 +157,111 @@ def test_deliberately_selected_exception_branch_is_persisted_without_placeholder
     assert None not in [item.branch_code for item in scenario.branch_exceptions]
 
 
+def test_exception_indicator_availability_is_scoped_to_selected_branch() -> None:
+    deposit_key = "avg_deposits"
+    loan_key = "avg_loans"
+    exceptions = {
+        "101": [{"indicator_key": deposit_key, "direction": "increase", "percentage": 10.0}]
+    }
+    all_keys = list(INDICATOR_REGISTRY)
+
+    branch_a_options = get_available_exception_indicator_keys(all_keys, exceptions, "101")
+    branch_b_options = get_available_exception_indicator_keys(all_keys, exceptions, "202")
+
+    assert deposit_key not in branch_a_options
+    assert loan_key in branch_a_options
+    assert deposit_key in branch_b_options
+    assert loan_key in branch_b_options
+
+
+def test_exception_duplicate_validation_is_exact_branch_indicator_pair() -> None:
+    key = "avg_loans"
+    exceptions = {
+        "101": [{"indicator_key": key, "direction": "increase", "percentage": 10.0}]
+    }
+
+    assert _has_exception_rule(exceptions, 101, key) is True
+    assert _has_exception_rule(exceptions, "202", key) is False
+
+
+def test_general_rules_do_not_remove_exception_indicator_options() -> None:
+    key = "avg_loans"
+    workspace = {
+        "general_rules": [{"indicator_key": key, "direction": "increase", "percentage": 10.0}],
+        "branch_exceptions": {},
+    }
+
+    assert key in _exception_indicator_options(workspace["branch_exceptions"], "101")
+
+
+def test_primary_overrides_do_not_remove_exception_indicator_options() -> None:
+    key = "avg_loans"
+    workspace = {
+        "branch_exceptions": {},
+        "primary_branch_overrides": {
+            key: {"input_mode": "final", "input_value": 1.0, "resolved_raw_value": 1.0}
+        },
+    }
+
+    assert key in get_available_exception_indicator_keys(
+        list(INDICATOR_REGISTRY), workspace["branch_exceptions"], "101"
+    )
+
+
+def test_no_exceptions_makes_every_canonical_indicator_available() -> None:
+    assert get_available_exception_indicator_keys(list(INDICATOR_REGISTRY), {}, "101") == list(INDICATOR_REGISTRY)
+
+
+def test_exception_availability_uses_canonical_keys_not_labels() -> None:
+    key = "avg_loans"
+    label = INDICATOR_REGISTRY[key].display_name
+    exceptions = {
+        "101": [{"indicator_key": label, "direction": "increase", "percentage": 10.0}]
+    }
+
+    assert key in get_available_exception_indicator_keys(list(INDICATOR_REGISTRY), exceptions, "101")
+
+
+def test_exception_records_coexist_for_same_indicator_on_different_branches() -> None:
+    key = "avg_loans"
+    workspace = {
+        "scenario_name": "سناریو",
+        "primary_branch_code": "303",
+        "period": "1404-04",
+        "general_rules": [],
+        "branch_exceptions": {
+            "101": [{"indicator_key": key, "direction": "increase", "percentage": 10.0}],
+            "202": [{"indicator_key": key, "direction": "decrease", "percentage": 5.0}],
+        },
+        "primary_branch_overrides": {},
+    }
+    from domain.multi_branch_contracts import ActorContext, ActorScope
+
+    scenario = _build_scenario(workspace, 3, ActorContext("u", ActorScope.STAFF))
+
+    assert [(item.branch_code, item.indicator_rules[0].indicator_key) for item in scenario.branch_exceptions] == [
+        ("101", key),
+        ("202", key),
+    ]
+
+
+def test_deleting_one_exception_pair_preserves_same_indicator_on_other_branch() -> None:
+    key = "avg_loans"
+    exceptions = {
+        "101": [{"indicator_key": key, "direction": "increase", "percentage": 10.0}],
+        "202": [{"indicator_key": key, "direction": "decrease", "percentage": 5.0}],
+    }
+
+    exceptions["101"].pop(0)
+    if not exceptions["101"]:
+        exceptions.pop("101")
+
+    assert "101" not in exceptions
+    assert exceptions["202"][0]["indicator_key"] == key
+    assert key in _exception_indicator_options(exceptions, "101")
+    assert key not in _exception_indicator_options(exceptions, "202")
+
+
 def test_primary_percentage_rule_rows_retain_entered_percentage_and_calculated_values() -> None:
     row = pd.Series({"avg_deposits": 1000.0})
     rows = _primary_rule_rows(
@@ -170,9 +300,56 @@ def test_review_rows_include_general_exception_and_primary_rule_families() -> No
     }
     baseline = pd.Series({key: 100.0})
 
-    assert "تمام شعب جامعه رسمی" in _general_rule_review_rows(workspace).iloc[0]["دامنه اعمال"]
+    assert "تمام شعب جامعه (کل شعب)" in _general_rule_review_rows(workspace).iloc[0]["دامنه اعمال"]
     assert "جایگزین قاعده عمومی" in _exception_rule_review_rows(workspace, {"202": "شعبه تست"}).iloc[0]["وضعیت تقدم"]
     assert _primary_rule_rows(workspace["primary_branch_overrides"], baseline).iloc[0]["entered"] == "۷۰٪ افزایش"
+
+
+def test_review_card_builders_return_strings_for_all_rule_families() -> None:
+    key = next(iter(INDICATOR_REGISTRY))
+    general_rule = {"indicator_key": key, "direction": "increase", "percentage": 10.0}
+    exception_rule = {"indicator_key": key, "direction": "decrease", "percentage": 5.0}
+    primary_row = _primary_rule_rows(
+        {key: {"input_mode": "percent", "input_value": 70.0, "resolved_raw_value": 170.0}},
+        pd.Series({key: 100.0}),
+    ).iloc[0].to_dict()
+
+    assert isinstance(_render_review_rule_card(general_rule, 12), str)
+    assert isinstance(_render_exception_card("202", exception_rule, {"202": "شعبه تست"}, {key}), str)
+    assert isinstance(_render_primary_rule_card(primary_row), str)
+
+
+def test_primary_review_cards_join_without_none_regression() -> None:
+    keys = list(INDICATOR_REGISTRY)[:3]
+    baseline = pd.Series({keys[0]: 100.0, keys[1]: 1000.0, keys[2]: 500.0})
+    overrides = {
+        keys[0]: {"input_mode": "percent", "input_value": 25.0, "resolved_raw_value": 125.0},
+        keys[1]: {"input_mode": "absolute", "input_value": -50.0, "resolved_raw_value": 950.0},
+        keys[2]: {"input_mode": "final", "input_value": 600.0, "resolved_raw_value": 600.0},
+    }
+
+    cards = [
+        _render_primary_rule_card(row)
+        for row in _primary_rule_rows(overrides, baseline).to_dict("records")
+    ]
+    body = "".join(cards)
+
+    assert None not in cards
+    assert body.count('multi-review-rule-card primary') == 3
+    assert "ورودی کاربر" in body
+
+
+def test_primary_review_card_handles_missing_optional_display_values() -> None:
+    card = _render_primary_rule_card({
+        "indicator": "شاخص تست",
+        "method": None,
+        "entered": None,
+        "baseline": 0,
+    })
+
+    assert isinstance(card, str)
+    assert "شاخص تست" in card
+    assert "—" in card
 
 
 def test_review_execution_remains_explicit_button() -> None:

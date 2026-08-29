@@ -296,14 +296,15 @@ def build_network_rank_chart(
     )
 
 
-def build_impact_distribution_chart(summary: Any) -> go.Figure:
+def build_impact_distribution_chart(summary: Any, *, mode: str = "combined") -> go.Figure:
     """Build compact stacked distribution bars for rank and grade outcomes."""
     total = max(1, int(summary.total_branches))
     figure = go.Figure()
-    rows = [
+    all_rows = [
         ("جابه‌جایی رتبه", [("صعود رتبه", summary.rank_up, "#16835B"), ("نزول رتبه", summary.rank_down, "#C43D4B"), ("بدون تغییر رتبه", summary.rank_same, "#687386")]),
         ("تغییر درجه", [("بهبود درجه", summary.grade_up, "#16835B"), ("افت درجه", summary.grade_down, "#C43D4B"), ("بدون تغییر درجه", summary.grade_same, "#344765")]),
     ]
+    rows = all_rows if mode == "combined" else all_rows[:1] if mode == "rank" else all_rows[1:]
     for label, parts in rows:
         for name, count, color in parts:
             pct = count * 100 / total
@@ -319,7 +320,8 @@ def build_impact_distribution_chart(summary: Any) -> go.Figure:
             ))
     figure.update_layout(barmode="stack")
     figure.update_xaxes(title="تعداد شعب", range=[0, total], tickformat="d")
-    return apply_chart_layout(figure, title="توزیع اثر سناریو بر شبکه", height=300, left_margin=125)
+    title = "توزیع جابه‌جایی رتبه" if mode == "rank" else "توزیع تغییر درجه" if mode == "grade" else "توزیع اثر سناریو بر شبکه"
+    return apply_chart_layout(figure, title=title, height=280 if mode != "combined" else 300, left_margin=125)
 
 
 def build_indicator_impact_chart(frame: pd.DataFrame) -> go.Figure:

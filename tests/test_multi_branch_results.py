@@ -12,6 +12,9 @@ from ui.multi_branch_results import (
     filter_network_results,
     managerial_conclusion,
     managerial_conclusion_model,
+    _distribution_grid_html,
+    _movers_panel_html,
+    _primary_outcome_html,
     result_header_html,
     primary_branch_result,
     summarize_network,
@@ -169,15 +172,65 @@ def test_positive_rank_movement_means_improvement():
     row = table.loc[table["branch_id"].eq("1")].iloc[0]
     assert row["rank_change"] == 2
     assert row["rank_status"] == "rank_up"
-    assert format_rank_movement_label(row["rank_change"]) == "۲ رتبه بهبود"
+    assert format_rank_movement_label(row["rank_change"]) == "۲ رتبه صعود"
+    assert format_rank_movement_label(-3) == "۳ رتبه نزول"
+    assert format_rank_movement_label(0) == "بدون جابه‌جایی"
 
 
-def test_result_header_uses_separated_metadata_cards_not_crowded_pills():
-    markup = result_header_html({"نام سناریو": "آزمون", "جامعه رسمی": "۳ شعبه"})
+def test_result_header_is_one_cohesive_hero_not_crowded_pills():
+    markup = result_header_html({"نام سناریو": "آزمون", "جامعه (کل شعب)": "۳ شعبه"})
+    assert markup.startswith('<section class="multi-results-hero" data-multi-branch-results="true">')
+    assert 'class="multi-results-core"' in markup
     assert 'class="multi-results-metadata"' in markup
-    assert markup.count("<article>") == 2
-    assert "<span>نام سناریو</span><strong>آزمون</strong>" in markup
+    assert "نتایج سناریوی چندشعبه‌ای" in markup
+    assert "جامعه (کل شعب)" in markup
+    assert "جامعه رسمی" not in markup
     assert "multi-results-context" not in markup
+    assert '<div data-multi-branch-results="true">' not in markup
+
+
+def test_primary_outcome_is_single_self_contained_component_with_three_metric_cards():
+    manifest = (
+        EffectiveChange(
+            branch_code="1",
+            indicator_key="avg_deposits",
+            baseline_value=100,
+            scenario_value=130,
+            effective_source=EffectiveChangeSource.PRIMARY_EXPLICIT,
+            explicit_input_mode="percent",
+            explicit_input_value=30,
+        ),
+    )
+    table = build_network_result_table(_comparison(), manifest)
+    row, changes = primary_branch_result(table, manifest, "1")
+    markup = _primary_outcome_html(row, changes, "1")
+    assert markup.startswith('<section class="multi-primary-panel" data-multi-branch-results="true">')
+    assert markup.count('class="multi-primary-metric-card') == 3
+    assert 'class="multi-primary-comparison"' in markup
+    assert 'class="multi-primary-rules-grid"' in markup
+    assert "ورودی کاربر" in markup and "مقدار مبنا" in markup and "مقدار تغییر" in markup and "مقدار نهایی" in markup
+    assert 'dir="ltr"' in markup
+    assert "st.metric" not in markup
+
+
+def test_compact_distribution_and_mover_markup_are_self_contained_cards():
+    table = build_network_result_table(_comparison(), ())
+    summary = summarize_network(table)
+    distribution = _distribution_grid_html(summary)
+    movers = (
+        '<section class="multi-movers-grid" data-multi-branch-results="true">'
+        + _movers_panel_html("بیشترین صعود", top_movers(table, improvement=True, limit=3), True)
+        + _movers_panel_html("بیشترین نزول", top_movers(table, improvement=False, limit=3), False)
+        + "</section>"
+    )
+    assert distribution.startswith('<section class="multi-distribution-grid" data-multi-branch-results="true">')
+    assert distribution.count('class="multi-distribution-panel"') == 2
+    assert distribution.count('class="multi-distribution-row') == 6
+    assert 'class="multi-distribution-bar"' in distribution and "<i style=\"width:" in distribution
+    assert movers.startswith('<section class="multi-movers-grid" data-multi-branch-results="true">')
+    assert movers.count('class="multi-mover-panel') == 2
+    assert movers.count('class="multi-mover-row') <= 6
+    assert "رتبه فعلی" in movers and "رتبه سناریویی" in movers
 
 
 def test_managerial_conclusion_model_has_headline_body_and_evidence_items():
@@ -200,6 +253,17 @@ def test_impact_distribution_chart_is_compact_and_hides_tiny_segment_labels():
     figure = build_impact_distribution_chart(summary)
     assert figure.layout.height == 300
     assert figure.layout.xaxis.title.text == "تعداد شعب"
+
+
+def test_rank_and_grade_distribution_charts_are_separate():
+    table = build_network_result_table(_comparison(), ())
+    summary = summarize_network(table)
+    rank_figure = build_impact_distribution_chart(summary, mode="rank")
+    grade_figure = build_impact_distribution_chart(summary, mode="grade")
+    assert rank_figure.layout.title.text == "توزیع جابه‌جایی رتبه"
+    assert grade_figure.layout.title.text == "توزیع تغییر درجه"
+    assert rank_figure.layout.height == 280
+    assert grade_figure.layout.height == 280
 
 
 def test_persisted_results_can_render_summary_without_manifest_detail():

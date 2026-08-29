@@ -216,6 +216,27 @@ def test_changes_and_result_summaries_are_persisted(
     assert results == [result_record(source.scenario_id)]
 
 
+def test_draft_update_preserves_existing_result_summaries_when_not_replaced(
+    repository: SQLiteScenarioRepository,
+) -> None:
+    source = scenario_record(status="executed")
+    created = repository.create_scenario(
+        source, [change_record(source.scenario_id)], [result_record(source.scenario_id)]
+    )
+    updated = repository.update_scenario(
+        replace(created, status="draft"),
+        [],
+        expected_row_version=1,
+        result_summaries=None,
+        requesting_user_id="user.one",
+    )
+
+    _, _, results = repository.get_scenario(updated.scenario_id, "user.one")
+
+    assert updated.status == "draft"
+    assert results == [result_record(source.scenario_id)]
+
+
 def test_indicator_edit_mode_is_persisted(repository: SQLiteScenarioRepository) -> None:
     source = scenario_record()
     repository.create_scenario(
