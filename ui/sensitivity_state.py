@@ -26,6 +26,10 @@ def new_scenario_draft(mode: ScenarioType | None = None) -> dict[str, Any]:
         "bulk_rules": [],
         "manual_overrides": [],
         "target_rank_request": {},
+        "target_comparison_result": None,
+        "target_execution_completed": False,
+        "target_execution_in_progress": False,
+        "target_save_in_progress": False,
         "validation_errors": [],
         "execution_result": None,
         "target_solution": None,
@@ -48,6 +52,8 @@ def switch_scenario_mode(state: MutableMapping[str, Any], mode: ScenarioType) ->
     current = state[SENSITIVITY_DRAFT_KEY]
     if current.get("scenario_type") is not mode:
         state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+        if mode is ScenarioType.MULTI_BRANCH:
+            state.pop("multi_branch_workspace", None)
     return state[SENSITIVITY_DRAFT_KEY]
 
 
@@ -55,6 +61,8 @@ def start_new_scenario(state: MutableMapping[str, Any], mode: ScenarioType) -> d
     """Start a clean wizard even when the requested mode matches the old draft."""
     initialize_sensitivity_state(state)
     state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+    if mode is ScenarioType.MULTI_BRANCH:
+        state.pop("multi_branch_workspace", None)
     for key in list(state):
         text = str(key)
         if text in {"sensitivity_focus_branch", "official_result_branch"} or text.startswith(
@@ -75,6 +83,10 @@ def set_focus_branch(draft: dict[str, Any], branch_id: str | None, source: str |
         draft["target_rank_request"] = {}
         draft["execution_result"] = None
         draft["target_solution"] = None
+        draft["target_comparison_result"] = None
+        draft["target_execution_completed"] = False
+        draft["target_execution_in_progress"] = False
+        draft["target_save_in_progress"] = False
         draft["show_result"] = False
 
 
@@ -95,6 +107,10 @@ def invalidate_computed_result(draft: dict[str, Any]) -> None:
     """Discard backend output after any request-defining input changes."""
     draft["execution_result"] = None
     draft["target_solution"] = None
+    draft["target_comparison_result"] = None
+    draft["target_execution_completed"] = False
+    draft["target_execution_in_progress"] = False
+    draft["target_save_in_progress"] = False
     draft["show_result"] = False
     draft["execute_requested"] = False
 
@@ -137,6 +153,12 @@ def reset_sensitivity_draft(state: MutableMapping[str, Any]) -> None:
     initialize_sensitivity_state(state)
     mode = state[SENSITIVITY_DRAFT_KEY].get("scenario_type")
     state[SENSITIVITY_DRAFT_KEY] = new_scenario_draft(mode)
+    for key in list(state):
+        text = str(key)
+        if text in {"sensitivity_focus_branch", "official_result_branch"} or text.startswith(
+            ("select_FOCUS_BRANCH_ONLY_", "focus_op_", "focus_value_", "focus_direction_")
+        ):
+            state.pop(key, None)
 
 
 def copy_sensitivity_draft(state: MutableMapping[str, Any]) -> dict[str, Any]:
@@ -144,7 +166,11 @@ def copy_sensitivity_draft(state: MutableMapping[str, Any]) -> dict[str, Any]:
     copied = deepcopy(state[SENSITIVITY_DRAFT_KEY])
     copied["execution_result"] = None
     copied["target_solution"] = None
+    copied["target_execution_completed"] = False
+    copied["target_execution_in_progress"] = False
+    copied["target_save_in_progress"] = False
+    copied["target_comparison_result"] = None
     copied["show_result"] = False
-    copied["current_step"] = 4
+    copied["current_step"] = 2 if copied.get("scenario_type") is ScenarioType.TARGET_RANK else 4
     state[SENSITIVITY_DRAFT_KEY] = copied
     return copied

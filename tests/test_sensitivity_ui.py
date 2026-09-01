@@ -72,6 +72,20 @@ def test_starting_new_focus_scenario_never_restores_old_branch_or_widgets() -> N
     assert not any(str(key).startswith("focus_value_") for key in state)
 
 
+def test_reset_scenario_clears_stale_focus_widget_state() -> None:
+    state = {
+        SENSITIVITY_DRAFT_KEY: new_scenario_draft(ScenarioType.FOCUS_BRANCH_ONLY),
+        "sensitivity_focus_branch": "103",
+        "focus_value_avg_deposits_PERCENT_CHANGE": "10",
+    }
+    state[SENSITIVITY_DRAFT_KEY].update(focus_branch_id="103", selected_indicator_ids=["avg_deposits"])
+    reset_sensitivity_draft(state)
+
+    assert state[SENSITIVITY_DRAFT_KEY]["focus_branch_id"] is None
+    assert "sensitivity_focus_branch" not in state
+    assert not any(str(key).startswith("focus_value_") for key in state)
+
+
 def test_focus_branch_change_clears_stale_branch_inputs() -> None:
     draft = new_scenario_draft(ScenarioType.FOCUS_BRANCH_ONLY)
     set_focus_branch(draft, "103", "USER_SELECTED_BRANCH")
@@ -105,6 +119,25 @@ def test_indicator_deselection_removes_change_and_backend_results() -> None:
     set_selected_indicators(draft, ["avg_loans"])
     assert draft["focus_changes"] == {"avg_loans": {"value": 2}}
     assert draft["execution_result"] is None and not draft["show_result"]
+
+
+def test_target_rank_input_changes_clear_proposal_and_execution_state() -> None:
+    draft = new_scenario_draft(ScenarioType.TARGET_RANK)
+    draft.update(
+        focus_branch_id="103",
+        selected_indicator_ids=["avg_deposits", "avg_loans"],
+        target_comparison_result=object(),
+        target_execution_completed=True,
+        target_solution=object(),
+        show_result=True,
+    )
+    set_selected_indicators(draft, ["avg_deposits"])
+    assert draft["target_comparison_result"] is None
+    assert not draft["target_execution_completed"]
+    draft.update(target_comparison_result=object(), target_execution_completed=True)
+    set_focus_branch(draft, "2001")
+    assert draft["target_comparison_result"] is None
+    assert not draft["target_execution_completed"]
 
 
 def test_rule_override_deletion_and_return_to_edit_invalidate_results() -> None:
@@ -184,12 +217,12 @@ def test_focus_result_presentation_contains_complete_official_baseline_and_scena
     )
     summaries, indicators = focus_result_presentation(comparison)
     assert {item["label"] for item in summaries} == {"رتبه کل شعبه", "امتیاز کل", "درجه شعبه"}
-    assert next(item for item in summaries if item["label"] == "رتبه کل شعبه")["change"] == "15 رتبه بهبود"
-    assert indicators[0]["raw"]["current"] == "4.0 تریلیون"
+    assert next(item for item in summaries if item["label"] == "رتبه کل شعبه")["change"] == "۱۵ رتبه بهبود"
+    assert indicators[0]["raw"]["current"] == "۴٬۰۰۰٬۰۰۰٬۰۰۰٬۰۰۰"
     assert indicators[0]["raw"]["current_exact"] == "4,000,000,000,000"
-    assert indicators[0]["normalized"]["current"] == "500.0 از 1000"
+    assert indicators[0]["normalized"]["current"] == "۵۰۰٫۰ از ۱۰۰۰"
     assert indicators[0]["rank"] == {
-        "current": "45", "scenario": "31", "change": "14 رتبه بهبود", "change_numeric": 14,
+        "current": "۴۵", "scenario": "۳۱", "change": "۱۴ رتبه بهبود", "change_numeric": 14,
     }
     assert indicators[0]["weighted"]["current_numeric"] == pytest.approx(500.0 * WEIGHTS["avg_deposits"])
     assert indicators[0]["weighted"]["scenario_numeric"] == pytest.approx(550.0 * WEIGHTS["avg_deposits"])

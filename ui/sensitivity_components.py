@@ -7,8 +7,12 @@ import html
 import streamlit as st
 
 from ui.navigation import scenario_href
+from ui.navigation import icon_svg
 from ui.sensitivity_labels import SCENARIO_DEFINITIONS
-from ui.formatters import format_compact_number, format_percentage
+from ui.formatters import (
+    format_persian_number, format_persian_percentage,
+    format_signed_persian_number, format_signed_persian_percentage, persian_digits,
+)
 
 
 def render_scenario_cards() -> None:
@@ -18,9 +22,9 @@ def render_scenario_cards() -> None:
         href = scenario_href(item.scenario_type)
         cards.append(
             f'<a class="scenario-card {html.escape(item.color)}" href="{href}" target="_self">'
-            f'<span class="scenario-card-icon">{html.escape(item.icon)}</span>'
+            f'<span class="scenario-card-icon">{icon_svg(item.icon)}</span>'
             f'<h3>{html.escape(item.label)}</h3><p>{html.escape(item.description)}</p>'
-            '<span class="scenario-card-start">شروع</span></a>'
+            f'<span class="scenario-card-start">ایجاد {html.escape(item.label)} <b aria-hidden="true">←</b></span></a>'
         )
     st.markdown(f'<div class="scenario-card-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
 
@@ -29,18 +33,28 @@ def value_comparison_html(current: float, scenario: float) -> str:
     """Responsive, non-truncating raw-value comparison for one indicator."""
     difference = float(scenario) - float(current)
     percent = None if float(current) == 0 else difference / float(current) * 100.0
+    tone = "success" if difference > 0 else "danger" if difference < 0 else "neutral"
+    direction_text = "افزایش" if difference > 0 else "کاهش" if difference < 0 else "بدون تغییر"
+    direction_icon = "↗" if difference > 0 else "↘" if difference < 0 else "−"
     values = (
-        ("مقدار فعلی", format_compact_number(current)),
-        ("مقدار جدید سناریو", format_compact_number(scenario)),
-        ("تفاوت مطلق", format_compact_number(difference)),
-        ("تفاوت درصدی", "تعریف‌نشده برای مبنای صفر" if percent is None else format_percentage(percent)),
+        ("مقدار فعلی", format_persian_number(current, decimals=0), "current", ""),
+        ("مقدار سناریو", format_persian_number(scenario, decimals=0), "scenario", ""),
+        ("تفاوت مطلق", format_signed_persian_number(difference, decimals=0), tone, direction_icon),
+        ("تفاوت درصدی", "تعریف‌نشده برای مبنای صفر" if percent is None else format_signed_persian_percentage(percent, decimals=1), tone, direction_icon),
     )
-    cells = "".join(
-        f'<div class="value-comparison-item"><span>{html.escape(label)}</span>'
-        f'<strong class="numeric-ltr">{html.escape(value)}</strong></div>'
-        for label, value in values
+    cells = ""
+    for label, value, tone, icon in values:
+        icon_markup = f'<b aria-hidden="true">{html.escape(icon)}</b>' if icon else ""
+        cells += (
+            f'<div class="value-comparison-item {tone}"><span>{html.escape(label)}</span>'
+            f'{icon_markup}<strong class="numeric-fa" dir="rtl">{html.escape(value)}</strong></div>'
+        )
+    return (
+        f'<div class="value-comparison-card" data-value-comparison="true">{cells}</div>'
+        f'<div class="change-result-strip {tone}"><b aria-hidden="true">{direction_icon}</b>'
+        f'<span>{direction_text}</span><strong class="numeric-fa" dir="rtl">'
+        f'{html.escape(format_signed_persian_number(difference, decimals=0))}</strong></div>'
     )
-    return f'<div class="value-comparison-card">{cells}</div>'
 
 
 def render_value_comparison(current: float, scenario: float) -> None:
@@ -48,18 +62,20 @@ def render_value_comparison(current: float, scenario: float) -> None:
 
 
 def summary_cards_html(items: list[dict[str, str]], changed_count: int = 0) -> str:
+    icons = ("target", "folder", "bank")
     cards = "".join(
         f'<section class="comparison-strip-item {html.escape(item.get("tone", "neutral"))}">'
-        f'<h3>{html.escape(item["label"])}</h3><div class="comparison-values">'
-        f'<div><span>وضعیت فعلی</span><strong class="numeric-ltr" dir="ltr">{html.escape(item["current"])}</strong></div>'
-        f'<div><span>وضعیت سناریو</span><strong class="numeric-ltr" dir="ltr">{html.escape(item["scenario"])}</strong></div></div>'
-        f'<p><span>نتیجه تغییر</span>{html.escape(item["change"])}</p></section>'
-        for item in items
+        f'<header><span class="summary-metric-icon">{icon_svg(icons[index % len(icons)])}</span><h3>{html.escape(item["label"])}</h3></header>'
+        '<div class="comparison-values">'
+        f'<div><span>وضعیت فعلی</span><strong class="numeric-fa" dir="rtl">{html.escape(item["current"])}</strong></div>'
+        f'<div><span>وضعیت سناریو</span><strong class="numeric-fa" dir="rtl">{html.escape(item["scenario"])}</strong></div></div>'
+        f'<p><b aria-hidden="true">↗</b><span>نتیجه تغییر: {html.escape(item["change"])}</span></p></section>'
+        for index, item in enumerate(items)
     )
     return (
         '<div class="comparison-strip-header"><div><strong>جمع‌بندی مدیریتی سناریو</strong>'
         '<small>مقایسه وضعیت فعلی با نتیجه اجرای مدل رسمی</small></div>'
-        f'<span>{changed_count:,} شاخص تغییریافته</span></div>'
+        f'<span>{persian_digits(f"{changed_count:,}")} شاخص تغییریافته</span></div>'
         f'<div class="comparison-strip">{cards}</div>'
     )
 
@@ -102,12 +118,22 @@ def render_indicator_cards(items: list[dict[str, str]]) -> None:
 
 
 def render_wizard_steps(labels: tuple[str, ...], current_step: int) -> None:
-    cells = "".join(
-        f"<div class='wizard-step {'active' if index == current_step else ''}'>"
-        f"{index}. {html.escape(label)}</div>"
-        for index, label in enumerate(labels, 1)
-    )
-    st.markdown(f"<div class='wizard-steps'>{cells}</div>", unsafe_allow_html=True)
+    cells = []
+    for index, label in enumerate(labels, 1):
+        state = "completed" if index < current_step else "active" if index == current_step else "future"
+        number = persian_digits(index)
+        cells.append(
+            f'<div class="wizard-step wizard-step-{state} {"active" if state == "active" else ""}" data-step-state="{state}">'
+            f'<span class="wizard-step-index" aria-hidden="true">{number}</span>'
+            f'<span class="wizard-step-label">{number}. {html.escape(label)}</span></div>'
+        )
+        if index < len(labels):
+            cells.append('<span class="wizard-connector" aria-hidden="true"></span>')
+    variant = " target-rank-wizard" if labels == (
+        "تعریف هدف و انتخاب شاخص‌ها",
+        "نتایج سناریوی رتبه هدف",
+    ) else ""
+    st.markdown(f'<div class="wizard-steps{variant}" dir="rtl">{"".join(cells)}</div>', unsafe_allow_html=True)
 
 
 def render_process_timeline(labels: tuple[str, ...]) -> None:

@@ -16,13 +16,18 @@ from domain.scenario_contracts import (
     ScenarioRequest,
     ScenarioType,
     TargetRankRequest,
+    TargetRankComparisonResult,
     TargetRankSolution,
 )
 from engine.indicator_registry import INDICATOR_REGISTRY, PROFIT_LOSS_KEY, validate_indicator_value
 from engine.ranking_engine import BRANCH_ID, BRANCH_NAME, REGION, WEIGHTS
 from engine.scenario_rule_engine import ManualOverride, RuleOperation
 from services.selection_scope import SelectionScope
-from ui.formatters import format_compact_number, format_grade, format_managerial_number, format_percentage, format_rank, format_score
+from ui.formatters import (
+    format_compact_number, format_grade, format_percentage,
+    format_persian_number, format_persian_percentage, format_rank, format_score,
+    format_signed_persian_number, persian_digits,
+)
 
 
 def filter_branches(frame: pd.DataFrame, query: str) -> pd.DataFrame:
@@ -119,7 +124,7 @@ def build_multi_request(draft: dict[str, Any]) -> ScenarioRequest:
 
 def build_target_request(draft: dict[str, Any]) -> TargetRankRequest:
     if draft.get("scenario_type") is not ScenarioType.TARGET_RANK:
-        raise ValueError("اطلاعات این حالت با تحلیل رتبه هدف سازگار نیست.")
+        raise ValueError("اطلاعات این حالت با سناریوی رتبه هدف سازگار نیست.")
     settings = draft.get("target_rank_request", {})
     selected = unique_indicator_ids(draft.get("selected_indicator_ids", []))
     focus = str(draft.get("focus_branch_id") or "").strip()
@@ -135,6 +140,30 @@ def build_target_request(draft: dict[str, Any]) -> TargetRankRequest:
         minimum_growth_percent=float(settings.get("minimum_growth_percent", 0.0)),
         search_precision_percent=float(settings.get("search_precision_percent", 0.01)),
         allow_profit_loss=PROFIT_LOSS_KEY in selected,
+        period=draft.get("period"),
+    )
+
+
+def build_target_comparison_request(draft: dict[str, Any]) -> TargetRankRequest:
+    if draft.get("scenario_type") is not ScenarioType.TARGET_RANK:
+        raise ValueError("اطلاعات این حالت با سناریوی رتبه هدف سازگار نیست.")
+    settings = draft.get("target_rank_request", {})
+    selected = unique_indicator_ids(draft.get("selected_indicator_ids", []))
+    focus = str(draft.get("focus_branch_id") or "").strip()
+    if not focus:
+        raise ValueError("شعبه هدف باید انتخاب شود.")
+    if not selected:
+        raise ValueError("برای مسیر شاخص‌های منتخب کاربر، حداقل یک شاخص لازم است.")
+    return TargetRankRequest(
+        focus_branch_id=focus,
+        target_rank=int(settings["target_rank"]),
+        selected_indicator_ids=selected,
+        max_growth_percent=100.0,
+        tolerance_percent=0.01,
+        max_iterations=80,
+        minimum_growth_percent=0.0,
+        search_precision_percent=0.01,
+        allow_profit_loss=True,
         period=draft.get("period"),
     )
 
@@ -182,10 +211,11 @@ def _semantic_tone(value: float, tolerance: float = 1e-9) -> str:
 def focus_result_presentation(comparison) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build Persian cards solely from an official branch comparison."""
     rank_text, _ = rank_change_presentation(comparison.rank_change)
+    rank_text = persian_digits(rank_text)
     score_change = float(comparison.score_change)
     score_text = (
-        f"{format_score(abs(score_change))} امتیاز بهبود" if score_change > 0
-        else f"{format_score(abs(score_change))} امتیاز افت" if score_change < 0
+        f"{format_persian_number(abs(score_change), 1)} امتیاز بهبود" if score_change > 0
+        else f"{format_persian_number(abs(score_change), 1)} امتیاز افت" if score_change < 0
         else "بدون تغییر"
     )
     grade_changed = comparison.baseline_grade != comparison.scenario_grade
@@ -195,8 +225,8 @@ def focus_result_presentation(comparison) -> tuple[list[dict[str, Any]], list[di
     )
     changed = [item for item in comparison.indicator_comparisons if abs(float(item["raw_value_change"])) > 1e-9]
     summaries = [
-        {"label": "رتبه کل شعبه", "current": format_rank(comparison.baseline_rank), "scenario": format_rank(comparison.scenario_rank), "change": rank_text, "tone": _semantic_tone(comparison.rank_change)},
-        {"label": "امتیاز کل", "current": format_score(comparison.baseline_final_score), "scenario": format_score(comparison.scenario_final_score), "change": score_text, "tone": _semantic_tone(score_change)},
+        {"label": "رتبه کل شعبه", "current": format_persian_number(comparison.baseline_rank, 0), "scenario": format_persian_number(comparison.scenario_rank, 0), "change": rank_text, "tone": _semantic_tone(comparison.rank_change)},
+        {"label": "امتیاز کل", "current": format_persian_number(comparison.baseline_final_score, 1), "scenario": format_persian_number(comparison.scenario_final_score, 1), "change": score_text, "tone": _semantic_tone(score_change)},
         {"label": "درجه شعبه", "current": format_grade(comparison.baseline_grade), "scenario": format_grade(comparison.scenario_grade), "change": grade_text, "tone": _semantic_tone(score_change) if grade_changed else "neutral"},
     ]
     indicators = []
@@ -215,35 +245,35 @@ def focus_result_presentation(comparison) -> tuple[list[dict[str, Any]], list[di
             "indicator_key": item["indicator_key"],
             "icon": {"profit_loss": "±", "deposit_count": "#", "loan_count": "#", "commitment_count": "#"}.get(item["indicator_key"], "◈"),
             "name": INDICATOR_REGISTRY[item["indicator_key"]].display_name,
-            "weight": format_percentage(weight_factor * 100, decimals=0),
+            "weight": format_persian_percentage(weight_factor * 100, decimals=0),
             "tone": "success" if rank_tone == "improvement" else "danger" if rank_tone == "decline" else _semantic_tone(overall_effect),
             "status": indicator_rank_text,
             "raw": {
-                "current": format_managerial_number(item["baseline_raw_value"]),
-                "scenario": format_managerial_number(item["scenario_raw_value"]),
-                "absolute": format_managerial_number(item["raw_value_change"]),
-                "percent": format_percentage(item["raw_value_change_pct"], decimals=1),
+                "current": format_persian_number(item["baseline_raw_value"], 0),
+                "scenario": format_persian_number(item["scenario_raw_value"], 0),
+                "absolute": format_signed_persian_number(item["raw_value_change"], 0),
+                "percent": format_persian_percentage(item["raw_value_change_pct"], decimals=1),
                 "current_exact": format_compact_number(item["baseline_raw_value"]),
                 "scenario_exact": format_compact_number(item["scenario_raw_value"]),
                 "absolute_exact": format_compact_number(item["raw_value_change"]),
             },
             "normalized": {
-                "current": f"{format_score(normalized_current)} از 1000",
-                "scenario": f"{format_score(normalized_scenario)} از 1000",
-                "change": f"{normalized_delta:+,.1f}",
+                "current": f"{format_persian_number(normalized_current, 1)} از ۱۰۰۰",
+                "scenario": f"{format_persian_number(normalized_scenario, 1)} از ۱۰۰۰",
+                "change": format_signed_persian_number(normalized_delta, 1),
                 "current_percent": max(0.0, min(100.0, normalized_current / 10.0)),
                 "scenario_percent": max(0.0, min(100.0, normalized_scenario / 10.0)),
             },
             "rank": {
-                "current": format_rank(item["baseline_indicator_rank"]),
-                "scenario": format_rank(item["scenario_indicator_rank"]),
-                "change": indicator_rank_text,
+                "current": format_persian_number(item["baseline_indicator_rank"], 0),
+                "scenario": format_persian_number(item["scenario_indicator_rank"], 0),
+                "change": persian_digits(indicator_rank_text),
                 "change_numeric": indicator_rank_change,
             },
             "weighted": {
-                "current": format_score(weighted_current),
-                "scenario": format_score(weighted_scenario),
-                "effect": f"{overall_effect:+,.1f}" if abs(overall_effect) > 0.05 else format_score(overall_effect),
+                "current": format_persian_number(weighted_current, 1),
+                "scenario": format_persian_number(weighted_scenario, 1),
+                "effect": format_signed_persian_number(overall_effect, 1),
                 "current_numeric": weighted_current, "scenario_numeric": weighted_scenario,
                 "effect_numeric": overall_effect, "weight_factor": weight_factor,
             },
@@ -281,6 +311,10 @@ def target_solution_comparison(solution: TargetRankSolution) -> pd.DataFrame:
         return pd.DataFrame()
     from engine.comparison_engine import compare_model_outputs
     return compare_model_outputs(solution.baseline_outputs, solution.scenario_outputs).branch_comparison
+
+
+def target_path_results(comparison: TargetRankComparisonResult) -> tuple[Any, Any]:
+    return comparison.balanced_all_indicators, comparison.user_selected_indicators
 
 
 def service_error_message(message: str) -> str:

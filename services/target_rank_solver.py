@@ -8,6 +8,9 @@ import pandas as pd
 
 from domain.scenario_contracts import (
     IndicatorProposal,
+    TargetRankComparisonResult,
+    TargetRankPath,
+    TargetRankPathResult,
     TargetRankRequest,
     TargetRankSolution,
     TargetRankStatus,
@@ -19,6 +22,11 @@ from services.scenario_execution_service import branch_comparison_from_results
 from engine.comparison_engine import compare_model_outputs
 
 COUNT_INDICATOR_IDS = frozenset({"deposit_count", "loan_count", "commitment_count"})
+BALANCED_PATH_ID = "all_indicators_balanced"
+SELECTED_PATH_ID = "user_selected_balanced"
+BALANCED_PATH_NAME = "مسیر متوازن همه شاخص‌ها"
+SELECTED_PATH_NAME = "مسیر شاخص‌های منتخب کاربر"
+INTERNAL_MAX_GROWTH_PERCENT = 100000.0
 
 
 def applicable_count_value(numeric_candidate: float) -> int:
@@ -112,6 +120,114 @@ class TargetRankSolver:
             request, baseline, baseline_outputs, best_data, best_outputs, high,
             iterations, status, True, message,
         )
+
+    def solve_comparison(
+        self, request: TargetRankRequest, baseline_data: pd.DataFrame
+    ) -> TargetRankComparisonResult:
+        baseline = prepare_input_data(baseline_data)
+        baseline_outputs = run_ranking_model(baseline)
+        selected = tuple(dict.fromkeys(request.selected_indicator_ids))
+        balanced_path = TargetRankPath(
+            BALANCED_PATH_ID,
+            BALANCED_PATH_NAME,
+            tuple(INDICATOR_KEYS),
+            "رشد مشترک برای همه شاخص‌های رسمی مدل محاسبه می‌شود.",
+        )
+        selected_path = TargetRankPath(
+            SELECTED_PATH_ID,
+            SELECTED_PATH_NAME,
+            selected,
+            "رشد مشترک فقط برای شاخص‌های منتخب کاربر محاسبه می‌شود.",
+        )
+        balanced = self._solve_unbounded_path(request, baseline, baseline_outputs, balanced_path)
+        user_selected = self._solve_unbounded_path(request, baseline, baseline_outputs, selected_path)
+        return TargetRankComparisonResult(
+            focus_branch_id=str(request.focus_branch_id),
+            target_rank=request.target_rank,
+            balanced_all_indicators=balanced,
+            user_selected_indicators=user_selected,
+            baseline_outputs=baseline_outputs,
+            target_reached=balanced.target_reached or user_selected.target_reached,
+            iterations=balanced.solution.iterations + user_selected.solution.iterations,
+            message="Two independent target-rank paths were solved with the official model.",
+        )
+
+    def _solve_unbounded_path(
+        self, request: TargetRankRequest, baseline: pd.DataFrame,
+        baseline_outputs: ModelOutputs, path: TargetRankPath,
+    ) -> TargetRankPathResult:
+        path_request = TargetRankRequest(
+            focus_branch_id=request.focus_branch_id,
+            target_rank=request.target_rank,
+            selected_indicator_ids=path.selected_indicator_ids,
+            max_growth_percent=INTERNAL_MAX_GROWTH_PERCENT,
+            tolerance_percent=request.tolerance_percent,
+            max_iterations=request.max_iterations,
+            minimum_growth_percent=0.0,
+            search_precision_percent=request.search_precision_percent,
+            allow_profit_loss=True,
+            period=request.period,
+        )
+        validation = self._validate(path_request, baseline)
+        if validation:
+            return TargetRankPathResult(path, self._invalid(path_request, validation))
+        baseline_row = self._branch_result(baseline_outputs, path_request.focus_branch_id)
+        baseline_rank = int(baseline_row["rank"])
+        baseline_score = float(baseline_row["final_score"])
+        if path_request.target_rank >= baseline_rank:
+            comparison = compare_model_outputs(baseline_outputs, baseline_outputs)
+            return TargetRankPathResult(path, TargetRankSolution(
+                TargetRankStatus.NO_CHANGE_REQUIRED, str(path_request.focus_branch_id),
+                baseline_rank, path_request.target_rank, baseline_rank, baseline_score,
+                baseline_score, 0.0, path.selected_indicator_ids, (), 0, True,
+                "The focus branch already meets the requested target rank.",
+                baseline.copy(deep=True), baseline_outputs, baseline_outputs,
+                branch_comparison_from_results(comparison, path_request.focus_branch_id),
+            ))
+
+        iterations = 0
+        low = 0.0
+        high = 0.1
+        best_data: pd.DataFrame | None = None
+        best_outputs: ModelOutputs | None = None
+        while iterations < path_request.max_iterations and high <= INTERNAL_MAX_GROWTH_PERCENT:
+            high_data, high_outputs = self._run_candidate(path_request, baseline, high)
+            iterations += 1
+            rank = int(self._branch_result(high_outputs, path_request.focus_branch_id)["rank"])
+            if rank <= path_request.target_rank:
+                best_data, best_outputs = high_data, high_outputs
+                break
+            low = high
+            high *= 2.0
+        if best_data is None or best_outputs is None:
+            high_data, high_outputs = self._run_candidate(path_request, baseline, min(high, INTERNAL_MAX_GROWTH_PERCENT))
+            return TargetRankPathResult(path, self._solution(
+                path_request, baseline, baseline_outputs, high_data, high_outputs,
+                min(high, INTERNAL_MAX_GROWTH_PERCENT), iterations,
+                TargetRankStatus.TARGET_NOT_REACHABLE, False,
+                "رتبه هدف با شاخص‌های این مسیر قابل دستیابی نیست.",
+            ))
+        precision = min(path_request.search_precision_percent, path_request.tolerance_percent)
+        while high - low > precision and iterations < path_request.max_iterations:
+            middle = (low + high) / 2.0
+            candidate_data, candidate_outputs = self._run_candidate(path_request, baseline, middle)
+            iterations += 1
+            rank = int(self._branch_result(candidate_outputs, path_request.focus_branch_id)["rank"])
+            if rank <= path_request.target_rank:
+                high = middle
+                best_data, best_outputs = candidate_data, candidate_outputs
+            else:
+                low = middle
+        converged = high - low <= precision
+        solution = self._solution(
+            path_request, baseline, baseline_outputs, best_data, best_outputs, high,
+            iterations,
+            TargetRankStatus.TARGET_REACHED if converged else TargetRankStatus.MAX_ITERATIONS_REACHED,
+            True,
+            "Smallest common percentage found with exponential and binary search."
+            if converged else "Target was reached, but search precision was not achieved before max_iterations.",
+        )
+        return TargetRankPathResult(path, solution)
 
     @staticmethod
     def _validate(request: TargetRankRequest, baseline: pd.DataFrame) -> str | None:
@@ -284,3 +400,9 @@ def solve_target_rank(
     request: TargetRankRequest, baseline_data: pd.DataFrame
 ) -> TargetRankSolution:
     return TargetRankSolver().solve_target_rank(request, baseline_data)
+
+
+def solve_target_rank_comparison(
+    request: TargetRankRequest, baseline_data: pd.DataFrame
+) -> TargetRankComparisonResult:
+    return TargetRankSolver().solve_comparison(request, baseline_data)

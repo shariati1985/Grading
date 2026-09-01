@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 import pytest
 
@@ -17,6 +18,7 @@ from services.scenario_workspace_service import (
     restore_sensitivity_draft, serialize_sensitivity_draft,
 )
 from services.user_context import CurrentUser
+from ui.sensitivity_adapters import build_target_comparison_request
 from ui.sensitivity_state import new_scenario_draft
 
 
@@ -64,7 +66,7 @@ def test_save_list_and_restore_real_drafts(workspace, mode) -> None:
     assert [item.scenario_id for item in workspace.list_scenarios()] == [record.scenario_id]
     loaded = workspace.load_scenario(record.scenario_id, branch_ids=["103"], periods=["1404-04"])
     assert loaded.draft["scenario_type"] is mode
-    assert loaded.draft["current_step"] == 3
+    assert loaded.draft["current_step"] == (1 if mode is ScenarioType.TARGET_RANK else 3)
     assert loaded.draft["execution_result"] is None
     assert loaded.draft["entry_source"] == "saved"
 
@@ -123,6 +125,40 @@ def test_save_executed_uses_existing_official_result_without_reranking(workspace
     record, _, summaries = workspace.management.load_scenario(saved.scenario_id)
     assert record.status == "executed"
     assert summaries and any(item.branch_id == focus for item in summaries)
+
+
+def test_target_rank_execution_saves_two_path_summary_and_updates_same_record(workspace, input_df) -> None:
+    draft = new_scenario_draft(ScenarioType.TARGET_RANK)
+    draft.update(
+        scenario_name="رتبه هدف ذخیره",
+        focus_branch_id="103",
+        focus_branch_source="USER_SELECTED_BRANCH",
+        selected_indicator_ids=["avg_deposits"],
+        target_rank_request={"target_rank": 29},
+        current_step=2,
+    )
+    draft["target_comparison_result"] = ScenarioExecutionService().solve_target_rank_comparison(
+        build_target_comparison_request(draft), input_df
+    )
+    draft["target_execution_completed"] = True
+    first = workspace.save_execution(draft)
+    second = workspace.save_execution(draft)
+    assert first.scenario_id == second.scenario_id
+    assert first.status == second.status == "executed"
+    assert (first.row_version, second.row_version) == (1, 2)
+    assert len(workspace.list_scenarios(search="رتبه هدف ذخیره")) == 1
+    summary = second.summary["target_rank_result_summary"]
+    assert sorted(summary["paths"]) == ["all_indicators_balanced", "user_selected_balanced"]
+    assert second.summary["has_saved_result"] is True
+    json.dumps(second.summary, ensure_ascii=False, allow_nan=False)
+    assert "raw_data" not in json.dumps(second.summary, ensure_ascii=False)
+    loaded = workspace.load_target_scenario(
+        second.scenario_id, baseline_data=input_df, periods=["1404-04"], restore_execution=True
+    )
+    assert loaded.draft["current_step"] == 2
+    assert loaded.draft["target_execution_completed"] is True
+    assert loaded.draft["target_comparison_result"].balanced_all_indicators.path.display_name == "مسیر متوازن همه شاخص‌ها"
+    assert loaded.draft["target_comparison_result"].user_selected_indicators.path.display_name == "مسیر شاخص‌های منتخب کاربر"
 
 
 def test_empty_workspace_has_no_fake_persisted_history(workspace) -> None:

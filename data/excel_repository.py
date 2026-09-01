@@ -102,7 +102,9 @@ class ExcelBranchRepository:
             rows = (data.index[data["branch_name"].eq("")] + 2).tolist()
             raise ValueError(f"Blank branch_name values found at Excel rows: {rows}")
 
-        data["branch_id"] = data["branch_id"].map(normalize_branch_id)
+        # Keep identifiers on the long-standing object/string contract across
+        # pandas versions (pandas 3 otherwise infers its new StringDtype).
+        data["branch_id"] = data["branch_id"].map(normalize_branch_id).astype(object)
         if data["branch_id"].eq("").any():
             raise ValueError("Blank branch_id values are not allowed")
         duplicate_ids = data.loc[

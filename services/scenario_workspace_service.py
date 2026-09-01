@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pandas as pd
 
-from domain.scenario_contracts import ScenarioExecutionResult, ScenarioType, TargetRankSolution
+from domain.scenario_contracts import ScenarioExecutionResult, ScenarioType, TargetRankComparisonResult, TargetRankSolution
 from engine.comparison_engine import compare_model_outputs
 from engine.indicator_registry import INDICATOR_REGISTRY
 from engine.ranking_engine import BRANCH_ID, BRANCH_NAME
@@ -111,7 +111,10 @@ def restore_sensitivity_draft(
     ]
     draft["target_rank_request"] = dict(definition.get("target_rank_request") or {})
     draft["scenario_name"] = str(definition.get("scenario_name") or "")
-    draft["current_step"] = max(1, min(4, int(definition.get("current_step") or 1)))
+    stored_step = int(definition.get("current_step") or 1)
+    draft["current_step"] = max(1, min(4, stored_step))
+    if mode is ScenarioType.TARGET_RANK:
+        draft["current_step"] = max(1, min(2, stored_step))
     return draft, tuple(dict.fromkeys(warnings))
 
 
@@ -135,10 +138,69 @@ class ScenarioWorkspaceService:
         }
 
     def _summary(self, draft: dict[str, Any], lineage: dict[str, Any] | None = None) -> dict[str, Any]:
-        return {
+        summary = {
             "scenario_definition": serialize_sensitivity_draft(draft),
             "scenario_type": draft["scenario_type"].value,
             "phase3b_lineage": dict(lineage or self._lineage(draft)),
+        }
+        target_summary = self._target_result_summary(draft.get("target_comparison_result"))
+        if target_summary is not None:
+            summary["target_rank_result_summary"] = target_summary
+            summary["has_saved_result"] = True
+        return summary
+
+    @staticmethod
+    def _target_result_summary(comparison: Any) -> dict[str, Any] | None:
+        if not isinstance(comparison, TargetRankComparisonResult):
+            return None
+
+        def path_summary(path_result: Any) -> dict[str, Any]:
+            solution = path_result.solution
+            final_grade = solution.comparison.scenario_grade if solution.comparison else None
+            baseline_grade = solution.comparison.baseline_grade if solution.comparison else None
+            return {
+                "path_id": str(path_result.path.path_id),
+                "display_name": str(path_result.path.display_name),
+                "indicator_ids": list(map(str, path_result.path.selected_indicator_ids)),
+                "required_common_growth_percent": float(solution.required_common_growth_percent),
+                "target_reached": bool(solution.target_reached),
+                "status": str(solution.status.value),
+                "baseline_rank": None if solution.baseline_rank is None else int(solution.baseline_rank),
+                "target_rank": int(solution.target_rank),
+                "achieved_rank": None if solution.achieved_rank is None else int(solution.achieved_rank),
+                "baseline_score": None if solution.baseline_score is None else float(solution.baseline_score),
+                "achieved_score": None if solution.achieved_score is None else float(solution.achieved_score),
+                "baseline_grade": None if baseline_grade is None else str(baseline_grade),
+                "achieved_grade": None if final_grade is None else str(final_grade),
+                "iterations": int(solution.iterations),
+                "message": str(solution.message),
+                "indicator_proposals": [
+                    {
+                        "indicator_id": str(item.indicator_id),
+                        "baseline_raw_value": float(item.baseline_raw_value),
+                        "numeric_candidate_raw_value": float(item.numeric_candidate_raw_value),
+                        "proposed_raw_value": float(item.proposed_raw_value),
+                        "is_count_indicator": bool(item.is_count_indicator),
+                        "absolute_change": float(item.absolute_change),
+                        "percent_change": float(item.percent_change),
+                        "baseline_weighted_contribution": None if item.baseline_weighted_contribution is None else float(item.baseline_weighted_contribution),
+                        "scenario_weighted_contribution": None if item.scenario_weighted_contribution is None else float(item.scenario_weighted_contribution),
+                        "note": None if item.note is None else str(item.note),
+                    }
+                    for item in solution.indicator_proposals
+                ],
+            }
+
+        return {
+            "focus_branch_id": str(comparison.focus_branch_id),
+            "target_rank": int(comparison.target_rank),
+            "target_reached": bool(comparison.target_reached),
+            "iterations": int(comparison.iterations),
+            "message": str(comparison.message),
+            "paths": {
+                comparison.balanced_all_indicators.path.path_id: path_summary(comparison.balanced_all_indicators),
+                comparison.user_selected_indicators.path.path_id: path_summary(comparison.user_selected_indicators),
+            },
         }
 
     def list_scenarios(self, *, status: str | None = None, search: str | None = None,
@@ -194,6 +256,9 @@ class ScenarioWorkspaceService:
         )
         draft["entry_source"] = "saved"
         self._store_identity(draft, record)
+        if draft["scenario_type"] is ScenarioType.TARGET_RANK and record.status != "executed":
+            draft["current_step"] = 1
+            draft["target_execution_completed"] = False
         return LoadedWorkspaceScenario(record, draft, tuple(results), warnings)
 
     def load_focus_scenario(
@@ -223,6 +288,36 @@ class ScenarioWorkspaceService:
         loaded.draft["show_result"] = True
         return loaded
 
+    def load_target_scenario(
+        self, scenario_id: str, *, baseline_data: pd.DataFrame, periods: Iterable[str],
+        restore_execution: bool = False,
+    ) -> LoadedWorkspaceScenario:
+        loaded = self.load_scenario(
+            scenario_id, branch_ids=baseline_data[BRANCH_ID].astype(str), periods=periods
+        )
+        if loaded.draft["scenario_type"] is not ScenarioType.TARGET_RANK:
+            raise ValueError("سناریوی انتخاب‌شده از نوع رتبه هدف نیست.")
+        if not restore_execution:
+            loaded.draft["current_step"] = 1
+            loaded.draft["target_execution_completed"] = False
+            return loaded
+        if loaded.record.status != "executed":
+            loaded.draft["show_result"] = False
+            return LoadedWorkspaceScenario(
+                loaded.record, loaded.draft, loaded.results,
+                (*loaded.warnings, "این پیش‌نویس هنوز نتیجه محاسبه‌شده ندارد؛ تغییرات را بازبینی و سناریو را اجرا کنید."),
+            )
+        from services.scenario_execution_service import ScenarioExecutionService
+        from ui.sensitivity_adapters import build_target_comparison_request
+
+        loaded.draft["target_comparison_result"] = ScenarioExecutionService().solve_target_rank_comparison(
+            build_target_comparison_request(loaded.draft), baseline_data
+        )
+        loaded.draft["target_execution_timestamp"] = loaded.record.updated_at.isoformat(timespec="seconds")
+        loaded.draft["target_execution_completed"] = True
+        loaded.draft["current_step"] = 2
+        return loaded
+
     @staticmethod
     def _target_changes(solution: TargetRankSolution) -> list[ScenarioChange]:
         if solution.scenario_data is None:
@@ -240,6 +335,7 @@ class ScenarioWorkspaceService:
     def save_execution(self, draft: dict[str, Any]) -> ScenarioRecord:
         result = draft.get("execution_result")
         solution = draft.get("target_solution")
+        target_comparison = draft.get("target_comparison_result")
         if isinstance(result, ScenarioExecutionResult):
             changes = list(result.changes)
             comparison = result.comparison_results
@@ -248,6 +344,16 @@ class ScenarioWorkspaceService:
                 *(item.branch_id for item in result.modified_branches),
                 *(item.branch_id for item in result.rank_affected_branches),
             ]))
+        elif isinstance(target_comparison, TargetRankComparisonResult):
+            canonical = target_comparison.user_selected_indicators.solution
+            changes = self._target_changes(canonical)
+            comparison = compare_model_outputs(canonical.baseline_outputs, canonical.scenario_outputs)
+            affected = comparison.branch_comparison.loc[
+                comparison.branch_comparison["rank_change"].ne(0)
+                | comparison.branch_comparison["score_change"].ne(0)
+                | comparison.branch_comparison["grade_changed"]
+            ][BRANCH_ID].astype(str).tolist()
+            selected = list(dict.fromkeys([target_comparison.focus_branch_id, *affected]))
         elif isinstance(solution, TargetRankSolution) and solution.baseline_outputs is not None and solution.scenario_outputs is not None:
             changes = self._target_changes(solution)
             comparison = compare_model_outputs(solution.baseline_outputs, solution.scenario_outputs)
@@ -260,14 +366,8 @@ class ScenarioWorkspaceService:
         else:
             raise ValueError("نتیجه رسمی اجرا برای ذخیره در دسترس نیست.")
         persisted = dict(draft.get("persistence") or {})
-        save_as_new = persisted.get("status") == "executed"
+        save_as_new = False
         lineage = self._lineage(draft)
-        if save_as_new:
-            lineage = {
-                "lineage_id": lineage["lineage_id"],
-                "version_number": int(lineage["version_number"]) + 1,
-                "parent_scenario_id": persisted.get("scenario_id"),
-            }
         record = self.management.save_executed(
             scenario_name=str(draft.get("scenario_name") or "").strip(),
             baseline_period=str(draft.get("period") or ""), selected_branch_ids=selected,

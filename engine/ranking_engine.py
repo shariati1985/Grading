@@ -76,7 +76,7 @@ def prepare_input_data(input_df: pd.DataFrame) -> pd.DataFrame:
     """Return clean, canonical, numeric branch data ready for calculations."""
     normalized = normalize_columns(input_df)
     selected = normalized.loc[:, CANONICAL_COLUMNS].copy().reset_index(drop=True)
-    selected[BRANCH_ID] = selected[BRANCH_ID].map(normalize_text)
+    selected[BRANCH_ID] = selected[BRANCH_ID].map(normalize_text).astype(object)
     selected[BRANCH_NAME] = selected[BRANCH_NAME].map(normalize_text)
     selected[REGION] = selected[REGION].map(normalize_text)
     if selected[BRANCH_ID].eq("").any():

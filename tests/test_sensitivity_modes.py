@@ -14,7 +14,7 @@ from engine.scenario_rule_engine import ManualOverride, RuleOperation
 from services.scenario_execution_service import ScenarioExecutionService
 from services.scenario_execution_service import ScenarioRequestValidationError
 from services.selection_scope import SelectionScope
-from services.target_rank_solver import solve_target_rank
+from services.target_rank_solver import BALANCED_PATH_ID, SELECTED_PATH_ID, solve_target_rank, solve_target_rank_comparison
 
 
 def _request(mode: ScenarioType, focus: str, **kwargs) -> ScenarioRequest:
@@ -268,6 +268,25 @@ def test_duplicate_target_indicators_are_invalid(input_df) -> None:
         input_df,
     )
     assert solution.status is TargetRankStatus.INVALID_REQUEST
+
+
+def test_target_rank_comparison_generates_exactly_two_independent_official_paths(input_df) -> None:
+    request = _target(input_df, selected_indicator_ids=("avg_deposits", "profit_loss"), allow_profit_loss=True)
+    comparison = solve_target_rank_comparison(request, input_df)
+    paths = (comparison.balanced_all_indicators, comparison.user_selected_indicators)
+    assert len(paths) == 2
+    assert {item.path.path_id for item in paths} == {BALANCED_PATH_ID, SELECTED_PATH_ID}
+    assert comparison.balanced_all_indicators.path.selected_indicator_ids == tuple(INDICATOR_KEYS)
+    assert comparison.user_selected_indicators.path.selected_indicator_ids == ("avg_deposits", "profit_loss")
+    assert comparison.balanced_all_indicators.solution.scenario_outputs is not comparison.user_selected_indicators.solution.scenario_outputs
+    assert comparison.balanced_all_indicators.solution.baseline_outputs is not None
+    assert comparison.user_selected_indicators.solution.baseline_outputs is not None
+
+
+def test_target_rank_comparison_does_not_require_user_growth_ceiling(input_df) -> None:
+    request = _target(input_df, max_growth_percent=0.01)
+    comparison = solve_target_rank_comparison(request, input_df)
+    assert comparison.balanced_all_indicators.solution.required_common_growth_percent > request.max_growth_percent
 
 
 @pytest.mark.parametrize(
