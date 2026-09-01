@@ -26,6 +26,10 @@ def new_scenario_draft(mode: ScenarioType | None = None) -> dict[str, Any]:
         "bulk_rules": [],
         "manual_overrides": [],
         "target_rank_request": {},
+        "target_comparison_result": None,
+        "target_execution_completed": False,
+        "target_execution_in_progress": False,
+        "target_save_in_progress": False,
         "validation_errors": [],
         "execution_result": None,
         "target_solution": None,
@@ -79,6 +83,10 @@ def set_focus_branch(draft: dict[str, Any], branch_id: str | None, source: str |
         draft["target_rank_request"] = {}
         draft["execution_result"] = None
         draft["target_solution"] = None
+        draft["target_comparison_result"] = None
+        draft["target_execution_completed"] = False
+        draft["target_execution_in_progress"] = False
+        draft["target_save_in_progress"] = False
         draft["show_result"] = False
 
 
@@ -99,6 +107,10 @@ def invalidate_computed_result(draft: dict[str, Any]) -> None:
     """Discard backend output after any request-defining input changes."""
     draft["execution_result"] = None
     draft["target_solution"] = None
+    draft["target_comparison_result"] = None
+    draft["target_execution_completed"] = False
+    draft["target_execution_in_progress"] = False
+    draft["target_save_in_progress"] = False
     draft["show_result"] = False
     draft["execute_requested"] = False
 
@@ -154,7 +166,11 @@ def copy_sensitivity_draft(state: MutableMapping[str, Any]) -> dict[str, Any]:
     copied = deepcopy(state[SENSITIVITY_DRAFT_KEY])
     copied["execution_result"] = None
     copied["target_solution"] = None
+    copied["target_execution_completed"] = False
+    copied["target_execution_in_progress"] = False
+    copied["target_save_in_progress"] = False
+    copied["target_comparison_result"] = None
     copied["show_result"] = False
-    copied["current_step"] = 4
+    copied["current_step"] = 2 if copied.get("scenario_type") is ScenarioType.TARGET_RANK else 4
     state[SENSITIVITY_DRAFT_KEY] = copied
     return copied

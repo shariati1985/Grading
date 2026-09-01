@@ -129,7 +129,11 @@ def render_wizard_steps(labels: tuple[str, ...], current_step: int) -> None:
         )
         if index < len(labels):
             cells.append('<span class="wizard-connector" aria-hidden="true"></span>')
-    st.markdown(f'<div class="wizard-steps" dir="rtl">{"".join(cells)}</div>', unsafe_allow_html=True)
+    variant = " target-rank-wizard" if labels == (
+        "تعریف هدف و انتخاب شاخص‌ها",
+        "نتایج سناریوی رتبه هدف",
+    ) else ""
+    st.markdown(f'<div class="wizard-steps{variant}" dir="rtl">{"".join(cells)}</div>', unsafe_allow_html=True)
 
 
 def render_process_timeline(labels: tuple[str, ...]) -> None:

@@ -1213,6 +1213,150 @@ def apply_global_styles(
         .results-action-bar + [data-testid="stHorizontalBlock"] button { min-height: 44px; border-radius: 10px !important; font-weight: 800 !important; }
         .results-action-bar + [data-testid="stHorizontalBlock"] [data-testid="column"],
         .results-action-bar + [data-testid="stHorizontalBlock"] [data-testid="stColumn"] { min-width: 150px !important; flex: 0 0 150px !important; }
+        .wizard-steps.target-rank-wizard { grid-template-columns: minmax(240px,1fr) minmax(34px,.12fr) minmax(240px,1fr); gap: 14px; }
+        .wizard-steps.target-rank-wizard .wizard-step-label { font-size: 14px; line-height: 1.55; white-space: nowrap; }
+        .wizard-steps.target-rank-wizard .wizard-step-index { width: 42px; height: 42px; }
+        .wizard-steps.target-rank-wizard .wizard-connector { margin-top: 20px; }
+        .target-rank-hero, .target-rank-definition-panel, .target-rank-branch-selector,
+        .target-rank-target-control, .target-rank-goal-panel, .target-rank-indicator-grid,
+        .target-rank-path-grid, .target-rank-result-grid,
+        .target-rank-audit-panel, .target-rank-indicator-analysis, .target-rank-indicator-card {
+            direction: rtl; font-family: var(--font) !important;
+        }
+        .target-rank-definition-panel { display: grid; grid-template-columns: minmax(260px,1.25fr) minmax(260px,1fr) minmax(260px,1.05fr); gap: 12px; align-items: stretch; margin: 12px 0 14px; }
+        .target-rank-definition-panel > div { min-width: 0; padding: 15px; background: #fff; border: 1px solid var(--neutral-200); border-radius: 8px; box-shadow: var(--shadow-soft); }
+        .target-rank-branch-selector { border-right: 4px solid var(--primary-navy) !important; }
+        .target-rank-target-control { color: #fff; background: linear-gradient(135deg,var(--primary-navy),var(--brand-purple)) !important; border-color: transparent !important; }
+        .target-rank-definition-panel small, .target-rank-definition-panel span { display: block; font-size: 12px; font-weight: 800; color: var(--neutral-600); }
+        .target-rank-target-control small, .target-rank-target-control span { color: rgba(255,255,255,.78); }
+        .target-rank-definition-panel strong, .target-rank-definition-panel b { display: block; color: var(--en-navy-900); font-size: 17px; font-weight: 900; overflow-wrap: anywhere; }
+        .target-rank-target-control strong, .target-rank-target-control b { color: #fff; font-size: 30px; line-height: 1.35; }
+        .target-rank-current-state { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+        .target-rank-current-state span { padding: 9px 10px; background: var(--neutral-50); border-radius: 8px; }
+        .target-rank-indicator-explainer { margin: 14px 0 12px; padding: 14px 16px; background: #fff; border: 1px solid var(--neutral-200); border-right: 4px solid var(--brand-purple); border-radius: 8px; box-shadow: var(--shadow-soft); }
+        .target-rank-indicator-explainer h2, .target-rank-indicator-explainer p { margin: 0 !important; }
+        .target-rank-indicator-explainer p { color: var(--neutral-700); font-size: 13px; }
+        .target-rank-indicator-explainer > div { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+        .target-rank-indicator-explainer em, .target-rank-selection-summary em { padding: 5px 9px; color: var(--brand-purple); background: var(--en-purple-50); border: 1px solid #e1d5ea; border-radius: 999px; font-size: 12px; font-style: normal; font-weight: 900; }
+        .target-rank-indicator-explainer span { color: var(--neutral-700); font-size: 12px; font-weight: 800; }
+        .target-rank-selection-summary { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; margin: 14px 0; padding: 11px 12px; background: var(--neutral-50); border: 1px solid var(--neutral-200); border-radius: 8px; }
+        .target-rank-selection-summary strong { color: var(--primary-navy); font-size: 13px; font-weight: 900; white-space: nowrap; }
+        .target-rank-selection-summary div { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+        .target-rank-selection-summary span { color: var(--success); background: var(--success-bg); padding: 5px 9px; border-radius: 999px; font-size: 12px; font-weight: 900; white-space: nowrap; }
+        .target-rank-result-page, .target-rank-result-page *,
+        .target-rank-result-hero, .target-rank-result-hero *,
+        .target-rank-path-grid, .target-rank-path-grid *,
+        .target-rank-result-grid, .target-rank-result-grid *,
+        .target-rank-path-panel, .target-rank-path-kpi-grid,
+        .target-rank-path-kpi, .target-rank-path-indicator-list,
+        .target-rank-indicator-row { box-sizing: border-box; }
+        .target-rank-hero { margin: 10px 0 16px; padding: 18px; color: #fff;
+            background: linear-gradient(135deg,var(--primary-navy),var(--brand-purple));
+            border-radius: 12px; box-shadow: var(--shadow); }
+        .target-rank-result-hero { width: 100%; max-width: 100%; min-width: 0; overflow: hidden; }
+        .target-rank-hero header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+        .target-rank-hero h1, .target-rank-hero p { margin: 0 !important; color: #fff !important; }
+        .target-rank-hero em { padding: 5px 10px; background: rgba(22,131,91,.86); border-radius: 999px; font-style: normal; font-weight: 800; }
+        .target-rank-hero-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; margin-top: 14px; width: 100%; max-width: 100%; min-width: 0; }
+        .target-rank-result-meta-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); width: 100%; max-width: 100%; min-width: 0; }
+        .target-rank-hero-grid span, .target-rank-path-metrics span { min-width: 0; display: grid; gap: 2px; padding: 9px 10px; border-radius: 8px; }
+        .target-rank-hero-grid span { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.18); }
+        .target-rank-result-meta-item { min-width: 0; max-width: 100%; overflow: hidden; }
+        .target-rank-hero-grid small, .target-rank-path-metrics small { color: inherit; opacity: .72; font-size: 11px; font-weight: 800; }
+        .target-rank-hero-grid b, .target-rank-path-metrics b { overflow-wrap: break-word; word-break: normal; font-size: 13px; font-weight: 900; }
+        .target-rank-result-timestamp { direction: ltr; unicode-bidi: isolate; text-align: left; white-space: normal; overflow-wrap: break-word; }
+        .target-rank-goal-panel, .target-rank-audit-panel { margin: 12px 0; padding: 14px 16px; background: #fff;
+            border: 1px solid var(--neutral-200); border-radius: 8px; box-shadow: var(--shadow-soft); }
+        .target-rank-goal-panel h2, .target-rank-goal-panel p, .target-rank-audit-panel h3, .target-rank-audit-panel p { margin: 0 !important; }
+        .target-rank-goal-panel p, .target-rank-audit-panel p { color: var(--neutral-700); font-size: 13px; }
+        .target-rank-review-facts { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 8px; margin-top: 12px; }
+        .target-rank-review-facts span { min-width: 0; padding: 8px 10px; background: var(--neutral-50); border: 1px solid var(--neutral-200); border-radius: 8px; }
+        .target-rank-review-facts small { display: block; color: var(--neutral-600); font-size: 10px; font-weight: 800; }
+        .target-rank-review-facts b { display: block; color: var(--en-navy-900); font-size: 12px; font-weight: 900; overflow-wrap: anywhere; }
+        .target-rank-path-grid, .target-rank-result-grid { display: grid;
+            grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; width: 100%; max-width: 100%; min-width: 0; margin: 12px 0; align-items: start; }
+        .target-rank-path-card { min-width: 0; display: grid; gap: 12px; padding: 14px; background: #fff;
+            border: 1px solid var(--neutral-200); border-inline-start: 4px solid var(--brand-purple);
+            border-radius: 8px; box-shadow: var(--shadow-soft); }
+        .target-rank-path-panel { width: 100%; max-width: 100%; min-width: 0; margin: 0; align-self: start; height: auto; grid-auto-rows: auto; align-content: start; }
+        .target-rank-path-card.navy { border-inline-start-color: var(--primary-navy); }
+        .target-rank-path-card.purple { border-inline-start-color: var(--brand-purple); }
+        .target-rank-path-card.success { border-inline-start-color: var(--success); }
+        .target-rank-path-card.danger { border-inline-start-color: var(--danger); }
+        .target-rank-path-card header { display: grid; grid-template-columns: 38px minmax(0,1fr) auto auto; gap: 10px; align-items: flex-start; }
+        .target-rank-path-content { display: grid; gap: 12px; width: 100%; max-width: 100%; min-width: 0; }
+        .target-rank-card-icon { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; color: var(--primary-navy); background: var(--en-navy-50); border-radius: 8px; }
+        .target-rank-path-card.purple .target-rank-card-icon { color: var(--brand-purple); background: var(--en-purple-50); }
+        .target-rank-card-icon svg, .target-rank-indicator-row svg, .target-rank-indicator-card svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+        .target-rank-path-card h3, .target-rank-path-card p { margin: 0 !important; }
+        .target-rank-path-card p { color: var(--neutral-700); font-size: 12px; }
+        .target-rank-path-card em, .target-rank-path-card header > b { flex: 0 0 auto; padding: 4px 9px; border-radius: 999px; font-style: normal; font-size: 12px; font-weight: 900; white-space: nowrap; }
+        .target-rank-path-card.proposal em { color: var(--primary-navy); background: var(--en-navy-50); }
+        .target-rank-path-card header > b { color: var(--brand-purple); background: var(--en-purple-50); }
+        .target-rank-path-card.success em { color: var(--success); background: var(--success-bg); }
+        .target-rank-path-card.danger em { color: var(--danger); background: var(--danger-bg); }
+        .target-rank-path-metrics, .target-rank-path-kpi-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; width: 100%; max-width: 100%; min-width: 0; }
+        .target-rank-path-metrics span, .target-rank-path-kpi { width: auto; max-width: 100%; min-width: 0; margin-inline: 0; background: var(--neutral-50); border: 1px solid var(--neutral-200); overflow: hidden; }
+        .target-rank-included { display: grid; gap: 7px; padding: 8px 10px; background: var(--neutral-50); border-radius: 8px; min-width: 0; height: auto; min-height: 0; align-content: start; }
+        .target-rank-included small { color: var(--neutral-600); font-size: 10px; font-weight: 900; }
+        .target-rank-included div, .target-rank-path-chips { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; max-width: 100%; min-width: 0; }
+        .target-rank-included span { color: var(--primary-navy); background: #fff; border: 1px solid var(--neutral-200); border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 900; white-space: normal; word-break: normal; overflow-wrap: break-word; }
+        .target-rank-proposal-list, .target-rank-path-indicator-list { display: grid; gap: 8px; grid-auto-rows: auto; align-content: start; height: auto; min-height: 0; }
+        .target-rank-indicator-row { width: auto; max-width: 100%; min-width: 0; margin-inline: 0; display: grid; grid-template-columns: minmax(120px,1.2fr) minmax(88px,.75fr) 20px minmax(88px,.75fr) minmax(82px,.65fr) minmax(70px,.55fr) minmax(82px,.65fr); gap: 8px; align-items: center; padding: 9px; background: #fff; border: 1px solid var(--neutral-200); border-radius: 8px; }
+        .target-rank-indicator-row > div { display: flex; gap: 7px; align-items: center; min-width: 0; }
+        .target-rank-indicator-row i { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; color: var(--brand-purple); background: var(--en-purple-50); border-radius: 8px; }
+        .target-rank-indicator-row strong { color: var(--en-navy-900); font-size: 12px; font-weight: 900; overflow-wrap: break-word; word-break: normal; line-height: 1.6; }
+        .target-rank-indicator-row b { color: var(--en-navy-900); font-size: 12px; font-weight: 900; overflow-wrap: break-word; word-break: normal; }
+        .target-rank-indicator-row small { display: block; color: var(--neutral-600); font-size: 10px; font-weight: 800; }
+        .target-rank-indicator-row em { color: var(--brand-purple); font-style: normal; text-align: center; font-weight: 900; }
+        .target-rank-analysis-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin: 12px 0; }
+        .target-rank-indicator-analysis { min-width: 0; padding: 14px; background: #fff; border: 1px solid var(--neutral-200); border-radius: 8px; box-shadow: var(--shadow-soft); }
+        .target-rank-indicator-analysis > header h3, .target-rank-indicator-analysis > header p { margin: 0 !important; }
+        .target-rank-indicator-analysis > header p { color: var(--neutral-700); font-size: 12px; }
+        .target-rank-indicator-analysis > div { display: grid; grid-template-columns: minmax(0,1fr); gap: 8px; margin-top: 10px; }
+        .target-rank-indicator-card { min-width: 0; max-width: 100%; padding: 10px; background: var(--neutral-50); border: 1px solid var(--neutral-200); border-radius: 8px; }
+        .target-rank-indicator-card-header { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; margin-bottom: 8px; }
+        .target-rank-indicator-card-header .target-rank-card-icon { width: 32px; height: 32px; color: var(--primary-navy); background: #fff; }
+        .target-rank-rank-badge { padding: 4px 8px; border-radius: 999px; font-style: normal; font-size: 11px; font-weight: 900; white-space: nowrap; }
+        .target-rank-rank-badge.improvement { color: var(--success); background: var(--success-bg); }
+        .target-rank-rank-badge.decline { color: var(--danger); background: var(--danger-bg); }
+        .target-rank-rank-badge.neutral { color: var(--neutral-700); background: #fff; }
+        .target-rank-indicator-card h4, .target-rank-indicator-card p { margin: 0 !important; }
+        .target-rank-indicator-name { min-width: 0; white-space: normal; word-break: normal; overflow-wrap: break-word; line-height: 1.7; }
+        .target-rank-indicator-card p { color: var(--neutral-700); font-size: 11px; }
+        .target-rank-indicator-value-row { display: grid; grid-template-columns: minmax(0,1fr) 24px minmax(0,1fr); gap: 7px; align-items: center; margin-bottom: 7px; }
+        .target-rank-indicator-value-row em { color: var(--brand-purple); font-style: normal; text-align: center; font-weight: 900; }
+        .target-rank-indicator-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+        .target-rank-indicator-footer { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; margin-top: 7px; }
+        .target-rank-indicator-values b, .target-rank-indicator-value-row b, .target-rank-indicator-metrics b, .target-rank-indicator-footer b { min-width: 0; padding: 7px 8px; color: var(--primary-navy); background: #fff; border-radius: 8px; font-size: 12px; overflow-wrap: break-word; word-break: normal; }
+        .target-rank-indicator-values b.scenario, .target-rank-indicator-value-row b.scenario, .target-rank-indicator-metrics b.scenario { color: var(--brand-purple); }
+        .target-rank-indicator-values b.success, .target-rank-indicator-values b.improvement,
+        .target-rank-indicator-metrics b.success, .target-rank-indicator-footer b.improvement { color: var(--success); background: var(--success-bg); }
+        .target-rank-indicator-values b.danger, .target-rank-indicator-values b.decline,
+        .target-rank-indicator-metrics b.danger, .target-rank-indicator-footer b.decline { color: var(--danger); background: var(--danger-bg); }
+        .target-rank-indicator-values small, .target-rank-indicator-value-row small, .target-rank-indicator-metrics small, .target-rank-indicator-footer small { display: block; color: var(--neutral-600); font-size: 10px; font-weight: 800; }
+        @media (max-width: 1100px) {
+            .target-rank-analysis-grid { grid-template-columns: minmax(0,1fr); }
+            .target-rank-hero-grid, .target-rank-result-meta-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+        }
+        @media (max-width: 900px) {
+            .wizard-steps.target-rank-wizard { overflow-x: auto; grid-template-columns: minmax(210px,max-content) minmax(24px,34px) minmax(210px,max-content); }
+            .target-rank-definition-panel, .target-rank-review-facts, .target-rank-path-grid, .target-rank-result-grid,
+            .target-rank-analysis-grid, .target-rank-indicator-analysis > div { grid-template-columns: minmax(0,1fr); }
+            .target-rank-hero-grid, .target-rank-result-meta-grid { grid-template-columns: minmax(0,1fr); }
+            .target-rank-selection-summary { grid-template-columns: minmax(0,1fr); }
+            .target-rank-path-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+            .target-rank-indicator-metrics, .target-rank-indicator-footer { grid-template-columns: repeat(2,minmax(0,1fr)); }
+            .target-rank-indicator-row { grid-template-columns: minmax(0,1fr); }
+            .target-rank-indicator-row em { display: none; }
+        }
+        @media (max-width: 620px) {
+            .target-rank-indicator-card-header, .target-rank-indicator-value-row,
+            .target-rank-indicator-metrics, .target-rank-indicator-footer { grid-template-columns: minmax(0,1fr); }
+            .target-rank-path-metrics, .target-rank-path-kpi-grid { grid-template-columns: minmax(0,1fr); }
+            .target-rank-indicator-value-row em { display: none; }
+            .target-rank-hero-grid b { font-size: 12px; }
+        }
         @media (max-width: 1100px) { .result-glance > div { grid-template-columns: repeat(2,minmax(0,1fr)); } }
         @media (max-width: 760px) {
             [data-testid="stSidebar"][aria-expanded="false"] { width: 0 !important; min-width: 0 !important; transform: translateX(100%) !important; pointer-events: none !important; }

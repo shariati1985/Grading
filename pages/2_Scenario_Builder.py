@@ -5,11 +5,12 @@ from __future__ import annotations
 import html
 from pathlib import Path
 import logging
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
-from domain.scenario_contracts import ScenarioExecutionResult, ScenarioType, TargetRankStatus
+from domain.scenario_contracts import ScenarioExecutionResult, ScenarioType
 from engine.indicator_registry import INDICATOR_REGISTRY, PROFIT_LOSS_KEY
 from engine.ranking_engine import BRANCH_ID, BRANCH_NAME, INDICATOR_TYPES, REGION, WEIGHTS
 from engine.scenario_rule_engine import RuleOperation
@@ -25,21 +26,21 @@ from ui import initialize_session_state
 from ui.components import render_empty_state
 from ui.data_access import load_dashboard_data
 from ui.formatters import (
-    format_compact_number, format_editable_number, format_grade, format_percentage,
+    format_compact_number, format_editable_number, format_grade, format_managerial_number, format_percentage,
     format_persian_number, format_persian_percentage, format_rank, format_raw_input_value, format_raw_value,
     format_score, format_signed_persian_number, format_signed_persian_percentage,
     parse_formatted_number, parse_raw_input_value, persian_digits,
 )
 from ui.sensitivity_adapters import (
-    action_priority, build_focus_request, build_multi_request, build_target_request,
-    count_proposal_presentation, preview_raw_operation, rank_change_presentation,
+    build_focus_request, build_multi_request, build_target_comparison_request,
+    preview_raw_operation, rank_change_presentation,
     focus_result_presentation,
     result_branch_options, select_official_branch_result, service_error_message,
     target_solution_comparison, unique_indicator_ids,
 )
 from ui.sensitivity_labels import (
-    INDICATOR_TYPE_LABELS, MODE_COLORS, OPERATION_LABELS, SCENARIO_TYPE_LABELS,
-    SCOPE_LABELS, TARGET_STATUS_LABELS,
+    INDICATOR_TYPE_LABELS, OPERATION_LABELS, SCENARIO_TYPE_LABELS,
+    SCOPE_LABELS,
 )
 from ui.sensitivity_components import (
     render_indicator_cards, render_process_timeline, render_summary_cards,
@@ -102,12 +103,13 @@ def _save_draft(draft, *, save_as_new: bool = False) -> None:
 
 
 def _save_execution(draft) -> None:
+    first_save = not bool(dict(draft.get("persistence") or {}).get("scenario_id"))
     try:
         workspace_service().save_execution(draft)
     except Exception as exc:
         _persistence_error(exc)
     else:
-        st.success("نتیجه رسمی سناریو ذخیره شد")
+        st.success("سناریو با موفقیت ذخیره شد." if first_save else "تغییرات سناریو با موفقیت ذخیره شد.")
 
 
 def _reload_saved(draft, data) -> None:
@@ -204,7 +206,7 @@ def _steps(mode: ScenarioType) -> tuple[str, ...]:
         return ("انتخاب شعبه", "انتخاب شاخص‌ها", "تعریف تغییرات", "بازبینی و اجرا")
     if mode is ScenarioType.MULTI_BRANCH:
         return ("انتخاب شعب", "تعریف قواعد عمومی", "تغییرات اختصاصی شعب", "بازبینی و اجرا")
-    return ("انتخاب شعبه و رتبه هدف", "انتخاب شاخص‌های قابل تغییر", "تنظیم محدوده بررسی", "محاسبه و پیشنهاد")
+    return ("تعریف هدف و انتخاب شاخص‌ها", "نتایج سناریوی رتبه هدف")
 
 
 def _wizard_header(draft: dict) -> None:
@@ -282,6 +284,71 @@ def _branch_summary(data, outputs, branch_id: str) -> None:
 
 def _select_focus(draft, data, outputs, user) -> None:
     ids, names = _branch_maps(data)
+    if draft["scenario_type"] is ScenarioType.TARGET_RANK:
+        current = draft.get("focus_branch_id") if draft.get("focus_branch_id") in ids else None
+        index = ids.index(current) + 1 if current in ids else 0
+        chosen = st.selectbox(
+            "انتخاب شعبه هدف",
+            [None, *ids],
+            index=index,
+            format_func=lambda item: "انتخاب شعبه" if item is None else _branch_label(item, names),
+            key="target_rank_branch_selector",
+            help="شعبه هدف را از کل جامعه رسمی شعب انتخاب کنید.",
+        )
+        set_focus_branch(draft, chosen, FocusBranchSource.USER_SELECTED_BRANCH.value if chosen else None)
+        if user.branch_id and str(user.branch_id) in ids:
+            st.caption(f"شعبه منتسب به کاربر: {_branch_label(str(user.branch_id), names)}")
+        if not draft.get("focus_branch_id"):
+            st.markdown(
+                '<section class="target-rank-definition-panel">'
+                '<header><h2>تعریف هدف</h2><p>برای شروع، یک شعبه هدف از فهرست رسمی شعب انتخاب کنید.</p></header>'
+                '</section>',
+                unsafe_allow_html=True,
+            )
+            return
+        raw, result = _focus_row(data, outputs, str(draft["focus_branch_id"]))
+        baseline_rank = int(result["rank"])
+        valid_ranks = list(range(1, baseline_rank))
+        if not valid_ranks:
+            st.warning("این شعبه هم‌اکنون بهترین رتبه را دارد و رتبه هدف بهتری برای آن قابل انتخاب نیست.")
+            return
+        stored_target = draft["target_rank_request"].get("target_rank")
+        target_index = valid_ranks.index(int(stored_target)) if stored_target in valid_ranks else max(0, len(valid_ranks) - 1)
+        target = st.selectbox(
+            "رتبه هدف",
+            valid_ranks,
+            index=target_index,
+            format_func=lambda item: f"رتبه {persian_digits(item)}",
+            key=f"target_rank_goal_{draft['focus_branch_id']}",
+            help="رتبه هدف باید بهتر از رتبه فعلی شعبه باشد.",
+        )
+        if draft["target_rank_request"].get("target_rank") != int(target):
+            draft["target_rank_request"]["target_rank"] = int(target)
+            draft["target_comparison_result"] = None
+            draft["target_solution"] = None
+            draft["target_execution_completed"] = False
+            draft["show_result"] = False
+        gap = float(result["final_score"]) - float(
+            outputs.final_result.loc[outputs.final_result["rank"].eq(int(target)), "final_score"].iloc[0]
+        ) if int(target) in set(outputs.final_result["rank"].astype(int)) else None
+        scenario_name = str(draft.get("scenario_name") or "سناریوی رتبه هدف")
+        st.markdown(
+            '<section class="target-rank-definition-panel">'
+            '<div class="target-rank-branch-selector"><small>شعبه هدف</small>'
+            f'<strong>{html.escape(str(raw[BRANCH_NAME]))}</strong><span>کد شعبه: <bdi>{html.escape(persian_digits(raw[BRANCH_ID]))}</bdi></span>'
+            f'<span>نام سناریو: {html.escape(scenario_name)}</span></div>'
+            '<div class="target-rank-current-state">'
+            f'<span><small>رتبه فعلی</small><b>{html.escape(persian_digits(baseline_rank))}</b></span>'
+            f'<span><small>امتیاز فعلی</small><b>{html.escape(persian_digits(format_score(result["final_score"])))}</b></span>'
+            f'<span><small>درجه فعلی</small><b>{html.escape(format_grade(result["grade"]))}</b></span></div>'
+            '<div class="target-rank-target-control"><small>رتبه هدف</small>'
+            f'<strong>{html.escape(persian_digits(target))}</strong>'
+            f'<span>بهبود موردنیاز: {html.escape(persian_digits(baseline_rank - int(target)))} رتبه</span>'
+            f'<span>شکاف امتیاز تخمینی: {html.escape(persian_digits(format_score(abs(gap)))) if gap is not None else "—"}</span></div>'
+            '</section>',
+            unsafe_allow_html=True,
+        )
+        return
     if draft["scenario_type"] is ScenarioType.MULTI_BRANCH:
         defaults = [item for item in draft.get("selected_branch_ids", []) if item in ids]
         if user.branch_id and str(user.branch_id) in ids and str(user.branch_id) not in defaults:
@@ -347,8 +414,13 @@ def _select_focus(draft, data, outputs, user) -> None:
             _, result = _focus_row(data, outputs, draft["focus_branch_id"])
             baseline_rank = int(result["rank"])
             target = st.number_input("رتبه هدف", min_value=1, max_value=len(data),
-                                     value=int(draft["target_rank_request"].get("target_rank", max(1, baseline_rank - 1))), step=1)
-            draft["target_rank_request"]["target_rank"] = int(target)
+                                     value=int(draft["target_rank_request"].get("target_rank", max(1, baseline_rank - 1))), step=1,
+                                     key=f"target_rank_goal_{draft['focus_branch_id']}")
+            if draft["target_rank_request"].get("target_rank") != int(target):
+                draft["target_rank_request"]["target_rank"] = int(target)
+                draft["target_comparison_result"] = None
+                draft["target_solution"] = None
+                draft["show_result"] = False
             if target >= baseline_rank:
                 st.info("شعبه هم‌اکنون رتبه درخواستی را دارد یا از آن بهتر است؛ تغییری لازم نیست.")
 
@@ -357,7 +429,18 @@ def _indicator_picker(draft, data, outputs) -> None:
     branch_id = draft["focus_branch_id"]
     raw, _ = _focus_row(data, outputs, branch_id)
     selected = list(draft.get("selected_indicator_ids", []))
-    st.caption("یک یا چند شاخص را انتخاب کنید. هر شاخص فقط یک‌بار قابل انتخاب است.")
+    if draft["scenario_type"] is ScenarioType.TARGET_RANK:
+        st.markdown(
+            '<section class="target-rank-indicator-explainer">'
+            '<header><h2>شاخص‌های مسیر منتخب خود را مشخص کنید</h2>'
+            '<p>سامانه دو مسیر را به‌صورت هم‌زمان محاسبه می‌کند: مسیر متوازن با استفاده از هر ۸ شاخص رسمی مدل و مسیر منتخب با استفاده از شاخص‌هایی که شما انتخاب می‌کنید.</p>'
+            '<p>انتخاب شاخص به معنی تعیین درصد تغییر نیست. سامانه مقدار تغییر لازم را با مدل رسمی محاسبه می‌کند. شاخص‌هایی را انتخاب کنید که تمرکز بر بهبود آن‌ها برای شعبه امکان‌پذیرتر است.</p></header>'
+            '<div><em>مسیر متوازن: هر ۸ شاخص</em><em>مسیر منتخب: انتخاب کاربر</em><span>حداقل یک شاخص برای مسیر منتخب انتخاب کنید.</span></div>'
+            '</section>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("یک یا چند شاخص را انتخاب کنید. هر شاخص فقط یک‌بار قابل انتخاب است.")
     for row_start in range(0, len(INDICATOR_REGISTRY), 4):
         for column, indicator_id in zip(st.columns(4), list(INDICATOR_REGISTRY)[row_start:row_start + 4]):
             definition = INDICATOR_REGISTRY[indicator_id]
@@ -384,6 +467,21 @@ def _indicator_picker(draft, data, outputs) -> None:
         set_selected_indicators(draft, list(unique_indicator_ids(selected)))
     except ValueError as exc:
         st.error(str(exc))
+    if draft["scenario_type"] is ScenarioType.TARGET_RANK:
+        selected_names = "، ".join(INDICATOR_REGISTRY[item].display_name for item in draft.get("selected_indicator_ids", [])) or "هنوز شاخصی انتخاب نشده است"
+        status = "آماده اجرا" if draft.get("selected_indicator_ids") else "حداقل یک شاخص انتخاب کنید"
+        chips = "".join(
+            f'<em>{html.escape(INDICATOR_REGISTRY[item].display_name)}</em>'
+            for item in draft.get("selected_indicator_ids", [])
+        ) or '<em>بدون انتخاب</em>'
+        st.markdown(
+            '<section class="target-rank-selection-summary">'
+            f'<strong>{html.escape(persian_digits(len(draft.get("selected_indicator_ids", []))))} شاخص انتخاب شده</strong>'
+            f'<div title="{html.escape(selected_names)}">{chips}</div>'
+            f'<span>{html.escape(status)}</span>'
+            '</section>',
+            unsafe_allow_html=True,
+        )
 
 
 def _focus_changes(draft, data) -> None:
@@ -1186,108 +1284,243 @@ def _persisted_result_page(draft, data) -> None:
         draft["show_result"] = False; draft["persisted_result_summaries"] = []; st.rerun()
 
 
-def _target_settings(draft) -> None:
-    settings = draft["target_rank_request"]
-    settings["max_growth_percent"] = st.number_input("حداکثر رشد قابل بررسی", min_value=0.01, value=float(settings.get("max_growth_percent", 100.0)), step=5.0)
-    with st.expander("تنظیمات پیشرفته"):
-        settings["minimum_growth_percent"] = st.number_input("حداقل رشد قابل بررسی", min_value=0.0, value=float(settings.get("minimum_growth_percent", 0.0)))
-        settings["tolerance_percent"] = st.number_input("حد پذیرش محاسبه", min_value=0.0001, value=float(settings.get("tolerance_percent", 0.01)), format="%.4f")
-        settings["search_precision_percent"] = st.number_input("دقت پیشنهاد", min_value=0.0001, value=float(settings.get("search_precision_percent", 0.01)), format="%.4f")
-        settings["max_iterations"] = st.number_input("حداکثر مراحل بررسی", min_value=1, value=int(settings.get("max_iterations", 40)), step=1)
+def _target_indicator_rows(path_result, *, include_effect: bool = False) -> str:
+    rows = []
+    for item in path_result.solution.indicator_proposals:
+        exact_current = persian_digits(format_compact_number(item.baseline_raw_value))
+        exact_proposed = persian_digits(format_compact_number(item.proposed_raw_value))
+        effect = (item.scenario_weighted_contribution or 0) - (item.baseline_weighted_contribution or 0)
+        effect_html = (
+            f'<span><small>اثر امتیاز</small><b>{html.escape(format_signed_persian_number(effect, 1))}</b></span>'
+            if include_effect else ""
+        )
+        rows.append(
+            '<article class="target-rank-indicator-row">'
+            f'<div><i>{icon_svg("target")}</i><strong>{html.escape(INDICATOR_REGISTRY[item.indicator_id].display_name)}</strong></div>'
+            f'<span title="{html.escape(exact_current)}"><small>فعلی</small><b>{html.escape(persian_digits(format_managerial_number(item.baseline_raw_value)))}</b></span>'
+            '<em aria-hidden="true">←</em>'
+            f'<span title="{html.escape(exact_proposed)}"><small>پیشنهادی</small><b>{html.escape(persian_digits(format_managerial_number(item.proposed_raw_value)))}</b></span>'
+            f'<span><small>درصد تغییر</small><b>{html.escape(format_persian_percentage(item.percent_change, 1))}</b></span>'
+            f'<span><small>وزن رسمی</small><b>{html.escape(format_persian_percentage(WEIGHTS[item.indicator_id] * 100, 0))}</b></span>'
+            f'{effect_html}</article>'
+        )
+    return "".join(rows) or f'<p>{html.escape(path_result.solution.message)}</p>'
 
 
-def _solve_target(draft, data) -> None:
+def _target_indicator_analysis_panel(path_result) -> str:
+    comparisons = {
+        item["indicator_key"]: item
+        for item in (path_result.solution.comparison.indicator_comparisons if path_result.solution.comparison else ())
+    }
+    cards = []
+    for item in path_result.solution.indicator_proposals:
+        comparison = comparisons.get(item.indicator_id, {})
+        rank_change = int(comparison.get("indicator_rank_change", 0) or 0)
+        rank_text, rank_tone = rank_change_presentation(rank_change)
+        effect = (item.scenario_weighted_contribution or 0) - (item.baseline_weighted_contribution or 0)
+        tone = "success" if effect > 0 else "danger" if effect < 0 else "neutral"
+        cards.append(
+            f'<article class="target-rank-indicator-card {tone}">'
+            f'<header class="target-rank-indicator-card-header"><span class="target-rank-card-icon">{icon_svg("target")}</span>'
+            f'<div><h4 class="target-rank-indicator-name">{html.escape(INDICATOR_REGISTRY[item.indicator_id].display_name)}</h4>'
+            f'<p>{html.escape(format_persian_percentage(WEIGHTS[item.indicator_id] * 100, 0))} وزن رسمی</p></div>'
+            f'<em class="target-rank-rank-badge {rank_tone}">{html.escape(persian_digits(rank_text))}</em></header>'
+            '<div class="target-rank-indicator-value-row">'
+            f'<b title="{html.escape(persian_digits(format_compact_number(item.baseline_raw_value)))}"><small>مقدار فعلی</small>{html.escape(persian_digits(format_managerial_number(item.baseline_raw_value)))}</b>'
+            '<em aria-hidden="true">←</em>'
+            f'<b title="{html.escape(persian_digits(format_compact_number(item.proposed_raw_value)))}" class="scenario"><small>مقدار پیشنهادی</small>{html.escape(persian_digits(format_managerial_number(item.proposed_raw_value)))}</b>'
+            '</div><div class="target-rank-indicator-metrics">'
+            f'<b><small>تغییر مطلق</small>{html.escape(format_signed_persian_number(item.absolute_change, 0))}</b>'
+            f'<b><small>درصد تغییر</small>{html.escape(format_persian_percentage(item.percent_change, 1))}</b>'
+            f'<b><small>وزن رسمی</small>{html.escape(format_persian_percentage(WEIGHTS[item.indicator_id] * 100, 0))}</b>'
+            f'<b><small>امتیاز موزون فعلی</small>{html.escape(format_persian_number(item.baseline_weighted_contribution, 1))}</b>'
+            f'<b class="scenario"><small>امتیاز موزون سناریو</small>{html.escape(format_persian_number(item.scenario_weighted_contribution, 1))}</b>'
+            f'<b class="{tone}"><small>اثر بر امتیاز کل</small>{html.escape(format_signed_persian_number(effect, 1))}</b>'
+            '</div><footer class="target-rank-indicator-footer">'
+            f'<b><small>رتبه فعلی شاخص</small>{html.escape(persian_digits(comparison.get("baseline_indicator_rank", "—")))}</b>'
+            f'<b><small>رتبه سناریوی شاخص</small>{html.escape(persian_digits(comparison.get("scenario_indicator_rank", "—")))}</b>'
+            f'<b class="{rank_tone}"><small>جابه‌جایی رتبه شاخص</small>{html.escape(persian_digits(rank_text))}</b>'
+            '</footer></article>'
+        )
+    return (
+        f'<section class="target-rank-indicator-analysis" data-target-path="{html.escape(path_result.path.path_id)}">'
+        f'<header><h3>{html.escape(path_result.path.display_name)}</h3><p>{html.escape(path_result.path.explanation)}</p></header>'
+        f'<div>{"".join(cards)}</div></section>'
+    )
+
+
+def _target_path_card(path_result, *, phase: str = "final", compact: bool = False) -> str:
+    solution = path_result.solution
+    final = phase == "final"
+    status_class = "success" if final and solution.target_reached else "danger" if final else "proposal"
+    status_text = "هدف محقق شد" if final and solution.target_reached else "هدف محقق نشد" if final else "آماده اجرا"
+    metrics = [
+        ("تعداد شاخص‌ها", len(path_result.path.selected_indicator_ids)),
+        ("درصد تغییر مشترک پیشنهادی", format_percentage(solution.required_common_growth_percent)),
+        ("رتبه هدف", solution.target_rank),
+    ]
+    if final:
+        metrics.extend([
+            ("رتبه فعلی", solution.baseline_rank or "—"),
+            ("رتبه نهایی", solution.achieved_rank or "—"),
+            ("بهبود رتبه", solution.rank_change if solution.rank_change is not None else "—"),
+            ("امتیاز فعلی", format_score(solution.baseline_score) if solution.baseline_score is not None else "—"),
+            ("امتیاز نهایی", format_score(solution.achieved_score) if solution.achieved_score is not None else "—"),
+            ("تغییر امتیاز", format_signed_persian_number((solution.achieved_score or 0) - (solution.baseline_score or 0), 1) if solution.achieved_score is not None and solution.baseline_score is not None else "—"),
+            ("درجه فعلی", format_grade(solution.comparison.baseline_grade) if solution.comparison else "—"),
+            ("درجه نهایی", format_grade(solution.comparison.scenario_grade) if solution.comparison else "—"),
+        ])
+    metric_html = "".join(
+        f'<span class="target-rank-path-kpi"><small>{html.escape(label)}</small><b>{html.escape(persian_digits(value))}</b></span>'
+        for label, value in metrics
+    )
+    accent = "navy" if path_result.path.path_id == "all_indicators_balanced" else "purple"
+    names = "، ".join(INDICATOR_REGISTRY[key].display_name for key in path_result.path.selected_indicator_ids)
+    included_chips = "".join(
+        f"<span>{html.escape(INDICATOR_REGISTRY[key].display_name)}</span>"
+        for key in path_result.path.selected_indicator_ids
+    )
+    phase_class = ""
+    return (
+        f'<article class="target-rank-path-card target-rank-path-panel {phase_class} {status_class} {accent}" data-target-path="{html.escape(path_result.path.path_id)}">'
+        f'<header><span class="target-rank-card-icon">{icon_svg("target")}</span><div><h3>{html.escape(path_result.path.display_name)}</h3>'
+        f'<p>{html.escape(path_result.path.explanation)}</p></div><em>{status_text}</em><b>{html.escape(persian_digits(len(path_result.path.selected_indicator_ids)))} شاخص</b></header>'
+        '<div class="target-rank-path-content">'
+        f'<div class="target-rank-path-metrics target-rank-path-kpi-grid">{metric_html}</div>'
+        f'<div class="target-rank-included" title="{html.escape(names)}"><small>شاخص‌های مسیر</small><div class="target-rank-path-chips">{included_chips}</div></div>'
+        f'<div class="target-rank-proposal-list target-rank-path-indicator-list">{_target_indicator_rows(path_result, include_effect=final)}</div>'
+        '</div>'
+        '</article>'
+    )
+
+
+def _execute_target_comparison(draft, data) -> None:
     try:
-        request = build_target_request(draft)
-        with st.spinner("در حال محاسبه تغییرات متوازن موردنیاز..."):
-            solution = ScenarioExecutionService().solve_target_rank(request, data)
+        request = build_target_comparison_request(draft)
+        with st.spinner("در حال محاسبه و اجرای دو مسیر با مدل رسمی..."):
+            comparison = ScenarioExecutionService().solve_target_rank_comparison(request, data)
     except (ValueError, KeyError) as exc:
         st.error(service_error_message(str(exc))); return
     except Exception:
-        LOGGER.exception("Unexpected target-rank execution failure")
+        LOGGER.exception("Unexpected target-rank comparison failure")
         st.error("محاسبه رتبه هدف با خطای پیش‌بینی‌نشده روبه‌رو شد. لطفاً دوباره تلاش کنید."); return
-    draft["target_solution"] = solution
-    st.session_state[SESSION_HISTORY_KEY].append({"نام سناریو": draft.get("scenario_name") or SCENARIO_TYPE_LABELS[ScenarioType.TARGET_RANK], "نوع": SCENARIO_TYPE_LABELS[ScenarioType.TARGET_RANK], "شعبه محوری": request.focus_branch_id})
-    st.rerun()
+    draft["target_comparison_result"] = comparison
+    draft["target_execution_completed"] = True
 
 
-def _target_result(draft, data) -> None:
-    solution = draft["target_solution"]
-    status = TARGET_STATUS_LABELS[solution.status]
-    (st.success if solution.target_reached else st.warning)(status)
-    cards = st.columns(4)
-    cards[0].metric("رتبه پایه", solution.baseline_rank or "—")
-    cards[1].metric("رتبه هدف", solution.target_rank)
-    cards[2].metric("رتبه حاصل‌شده", solution.achieved_rank or "—")
-    cards[3].metric("رشد مشترک موردنیاز", format_percentage(solution.required_common_growth_percent))
-    if solution.status is TargetRankStatus.MAX_ITERATIONS_REACHED:
-        st.info("ممکن است یک پیشنهاد موفق پیدا شده باشد، اما کمترین رشد موردنیاز در محدوده تنظیمات با قطعیت تعیین نشده است.")
-        st.write(f"تعیین قطعی حداقل رشد: {'بله' if solution.minimum_growth_established else 'خیر'}")
-    if solution.status is TargetRankStatus.TARGET_NOT_REACHABLE:
-        st.info(f"حداکثر رشد بررسی‌شده: {format_percentage(solution.required_common_growth_percent)}. سقف رشد یا شاخص‌های منتخب را بازبینی کنید.")
-    if solution.indicator_proposals:
-        rows = []
-        for proposal in solution.indicator_proposals:
-            shown = count_proposal_presentation(proposal)
-            rows.append({"شاخص": INDICATOR_REGISTRY[proposal.indicator_id].display_name, "مقدار پایه": proposal.baseline_raw_value,
-                         "پیشنهاد قابل اجرا": shown["applicable_value"], "تغییر مطلق": proposal.absolute_change, "درصد تغییر": proposal.percent_change})
-            if shown["show_ceiling_note"]: st.caption(f"{INDICATOR_REGISTRY[proposal.indicator_id].display_name}: پیشنهاد شمارشی با گرد کردن رو به بالا به عدد صحیح و اجرای دوباره مدل رسمی تأیید شده است.")
-            if proposal.indicator_id == PROFIT_LOSS_KEY and proposal.baseline_raw_value == 0:
-                st.info("مقدار صفر سود و زیان به دلیل نداشتن مبنای غیرصفر، با تغییر درصدی تغییر نکرد.")
-        st.caption(f"تعداد کل پیشنهادها: {len(rows):,}")
-        st.dataframe(rows, width="stretch", height=320, hide_index=True)
-        priorities, tied = action_priority(solution.indicator_proposals)
-        if priorities:
-            st.subheader("اولویت اقدامات")
-            st.caption("اولویت بر اساس اثر واقعی امتیاز موزون هر شاخص بر امتیاز کل این سناریو")
-            st.dataframe([{"شاخص": INDICATOR_REGISTRY[row["indicator_id"]].display_name, "اثر بر امتیاز کل": row["weighted_contribution_delta"]} for row in priorities], width="stretch", height=280, hide_index=True)
-            if tied: st.info("در این سناریو تفاوت معناداری میان اولویت شاخص‌ها دیده نمی‌شود.")
-        else:
-            st.info("در این سناریو اثر مثبت و قابل تفکیکی از امتیاز موزون شاخص‌ها بر امتیاز کل دیده نمی‌شود.")
-    if solution.scenario_outputs is not None and solution.baseline_outputs is not None:
-        if st.button("ذخیره نتیجه رسمی", key="save_target_execution"):
-            _save_execution(draft)
-        if st.button("اعمال پیشنهاد و مشاهده نتایج کامل", type="primary"):
-            draft["show_result"] = True; st.rerun()
-        if draft.get("show_result"):
-            _target_full_result(solution)
+def _target_step_one(draft, data, outputs, user) -> None:
+    _select_focus(draft, data, outputs, user)
+    if not draft.get("focus_branch_id"):
+        return
+    _indicator_picker(draft, data, outputs)
+    if st.button("اجرای سناریو و مقایسه دو مسیر", type="primary", width="stretch", key="target_rank_execute_paths", disabled=bool(draft.get("target_execution_in_progress"))):
+        if not str(draft.get("scenario_name") or "").strip():
+            st.error("نام سناریو را وارد کنید.")
+            return
+        if not draft.get("focus_branch_id"):
+            st.error("شعبه هدف را انتخاب کنید.")
+            return
+        if "target_rank" not in dict(draft.get("target_rank_request") or {}):
+            st.error("رتبه هدف باید بهتر از رتبه فعلی شعبه باشد.")
+            return
+        if not draft.get("selected_indicator_ids"):
+            st.error("برای تشکیل مسیر منتخب کاربر، حداقل یک شاخص را انتخاب کنید.")
+            return
+        draft["target_execution_in_progress"] = True
+        try:
+            _execute_target_comparison(draft, data)
+        finally:
+            draft["target_execution_in_progress"] = False
+        if draft.get("target_comparison_result") is None:
+            return
+        draft["target_solution"] = draft["target_comparison_result"].user_selected_indicators.solution
+        draft["target_execution_timestamp"] = datetime.now().isoformat(timespec="seconds")
+        draft["current_step"] = 2
+        st.rerun()
 
 
-def _target_full_result(solution) -> None:
-    st.subheader("نتیجه کامل اجرای رسمی")
-    frame = target_solution_comparison(solution).copy()
-    focus = frame.loc[frame[BRANCH_ID].astype(str).eq(str(solution.focus_branch_id))].iloc[0]
-    movement, _ = rank_change_presentation(int(focus["rank_change"]))
-    cards = st.columns(4)
-    cards[0].metric("رتبه", int(focus["scenario_rank"]), movement)
-    cards[1].metric("امتیاز نهایی", format_score(focus["scenario_score"]), f"{float(focus['score_change']):+.1f}")
-    cards[2].metric("درجه", format_grade(focus["scenario_grade"]))
-    cards[3].metric("تعداد شعب دارای تغییر واقعی", 1 if solution.indicator_proposals else 0)
-    st.subheader("مقایسه شاخص‌های شعبه محوری")
-    st.dataframe([{"شاخص": INDICATOR_REGISTRY[item.indicator_id].display_name, "مقدار پایه": item.baseline_raw_value,
-                   "مقدار سناریو": item.proposed_raw_value, "تغییر مقدار خام": item.absolute_change,
-                   "امتیاز نرمال‌شده فعلی": item.baseline_normalized_score, "امتیاز نرمال‌شده سناریو": item.scenario_normalized_score,
-                   "اثر بر امتیاز کل": (item.scenario_weighted_contribution or 0) - (item.baseline_weighted_contribution or 0)}
-                  for item in solution.indicator_proposals], width="stretch", hide_index=True)
-    modified = frame.loc[frame[BRANCH_ID].astype(str).eq(str(solution.focus_branch_id))] if solution.indicator_proposals else frame.iloc[0:0]
-    affected = frame.loc[frame["rank_change"].ne(0) | frame["score_change"].ne(0) | frame["grade_changed"]]
-    def display(source):
-        return pd.DataFrame({"نام شعبه": source[BRANCH_NAME], "کد شعبه": source[BRANCH_ID], "رتبه پایه": source["baseline_rank"],
-            "رتبه سناریو": source["scenario_rank"], "تغییر رتبه": source["rank_change"], "امتیاز پایه": source["baseline_score"],
-            "امتیاز سناریو": source["scenario_score"], "درجه پایه": source["baseline_grade"].map(format_grade),
-            "درجه سناریو": source["scenario_grade"].map(format_grade)})
-    st.subheader("شعب دارای تغییر در شاخص‌ها")
-    st.caption(f"تعداد کل: {len(modified):,}")
-    st.dataframe(display(modified), width="stretch", height=320, hide_index=True)
-    st.subheader("شعب دارای تغییر در رتبه، امتیاز یا درجه")
-    st.caption(f"تعداد کل: {len(affected):,}")
-    st.dataframe(display(affected), width="stretch", height=360, hide_index=True)
+def _target_final_results(draft, data) -> None:
+    comparison = draft.get("target_comparison_result")
+    if comparison is None or not draft.get("target_execution_completed"):
+        st.warning("ابتدا دو مسیر رتبه هدف را محاسبه و اجرا کنید.")
+        return
+    names = data.assign(**{BRANCH_ID: data[BRANCH_ID].astype(str)}).set_index(BRANCH_ID)[BRANCH_NAME].astype(str).to_dict()
+    branch_id = str(comparison.focus_branch_id)
+    branch_name = names.get(branch_id, branch_id)
+    timestamp = draft.get("target_execution_timestamp") or datetime.now().isoformat(timespec="seconds")
+    status = "موفق" if comparison.target_reached else "نیازمند بازبینی"
+    st.markdown(
+        '<section class="target-rank-result-page target-rank-hero target-rank-result-hero"><header><div><h1>نتیجه سناریوی رتبه هدف</h1>'
+        f'<p>{html.escape(str(draft.get("scenario_name") or "سناریوی رتبه هدف"))}</p></div>'
+        f'<em>{html.escape(status)}</em></header><div class="target-rank-hero-grid target-rank-result-meta-grid">'
+        f'<span class="target-rank-result-meta-item"><small>شعبه</small><b>{html.escape(branch_name)}</b></span>'
+        f'<span class="target-rank-result-meta-item"><small>کد شعبه</small><b>{html.escape(persian_digits(branch_id))}</b></span>'
+        f'<span class="target-rank-result-meta-item"><small>رتبه فعلی</small><b>{html.escape(persian_digits(comparison.balanced_all_indicators.solution.baseline_rank or "—"))}</b></span>'
+        f'<span class="target-rank-result-meta-item"><small>رتبه هدف</small><b>{html.escape(persian_digits(comparison.target_rank))}</b></span>'
+        f'<span class="target-rank-result-meta-item"><small>زمان اجرا</small><b class="target-rank-result-timestamp" dir="ltr">{html.escape(timestamp)}</b></span>'
+        '</div></section>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<section class="target-rank-result-page target-rank-result-grid">'
+        f'{_target_path_card(comparison.balanced_all_indicators, phase="final")}'
+        f'{_target_path_card(comparison.user_selected_indicators, phase="final")}'
+        '</section>',
+        unsafe_allow_html=True,
+    )
+    tab_indicators, tab_audit = st.tabs(["تحلیل شاخص‌ها", "جزئیات و ممیزی"])
+    with tab_indicators:
+        st.markdown(
+            '<section class="target-rank-result-page target-rank-analysis-grid">'
+            f'{_target_indicator_analysis_panel(comparison.balanced_all_indicators)}'
+            f'{_target_indicator_analysis_panel(comparison.user_selected_indicators)}'
+            '</section>',
+            unsafe_allow_html=True,
+        )
+    with tab_audit:
+        st.markdown(
+            '<section class="target-rank-audit-panel"><h3>جزئیات درخواست و ممیزی</h3>'
+            f'<p>رتبه هدف: {html.escape(persian_digits(comparison.target_rank))}</p>'
+            f'<p>تعداد کل تکرار حل‌گر: {html.escape(persian_digits(comparison.iterations))}</p></section>',
+            unsafe_allow_html=True,
+        )
+        for path_result in (comparison.balanced_all_indicators, comparison.user_selected_indicators):
+            if path_result.solution.scenario_outputs is not None and path_result.solution.baseline_outputs is not None:
+                frame = target_solution_comparison(path_result.solution)
+                with st.expander(f"جدول کامل شعب متأثر - {path_result.path.display_name}"):
+                    display_frame = frame.rename(columns={
+                        BRANCH_ID: "کد شعبه", BRANCH_NAME: "نام شعبه",
+                        "baseline_rank": "رتبه فعلی", "scenario_rank": "رتبه سناریو",
+                        "rank_change": "تغییر رتبه", "baseline_score": "امتیاز فعلی",
+                        "scenario_score": "امتیاز سناریو", "score_change": "تغییر امتیاز",
+                        "baseline_grade": "درجه فعلی", "scenario_grade": "درجه سناریو",
+                    }).copy()
+                    for column in display_frame.select_dtypes(include=["float", "int"]).columns:
+                        display_frame[column] = display_frame[column].map(lambda value: persian_digits(format_compact_number(value)))
+                    st.dataframe(display_frame, width="stretch", hide_index=True)
+                    st.download_button(
+                        "دریافت CSV",
+                        display_frame.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"target_rank_{path_result.path.path_id}.csv",
+                        mime="text/csv",
+                        key=f"target_rank_csv_{path_result.path.path_id}",
+                    )
+    actions = st.columns([1.4, 1.1, 5])
+    if actions[0].button("ذخیره سناریو", key="save_target_comparison_execution", type="primary", disabled=bool(draft.get("target_save_in_progress"))):
+        draft["target_save_in_progress"] = True
+        _save_execution(draft)
+        draft["target_save_in_progress"] = False
+    if actions[1].button("بازگشت و ویرایش", key="target_result_back_to_edit_secondary"):
+        draft["current_step"] = 1
+        st.rerun()
 
 
 def _navigation(draft) -> None:
     st.markdown('<div class="builder-action-row" data-builder-actions="true"></div>', unsafe_allow_html=True)
     columns = st.columns([1.35, 1.35, 5.55])
-    if columns[0].button("مرحله بعد", disabled=draft["current_step"] >= 4, type="primary", width="stretch"):
+    last_step = 4
+    next_disabled = draft["current_step"] >= last_step
+    if columns[0].button("مرحله بعد", disabled=next_disabled, type="primary", width="stretch"):
         draft["current_step"] += 1; st.rerun()
     if columns[1].button("مرحله قبل", disabled=draft["current_step"] <= 1, width="stretch"):
         draft["current_step"] -= 1; st.rerun()
@@ -1321,13 +1554,18 @@ def main() -> None:
         _persisted_result_page(draft, data); return
     if draft.get("show_result") and draft.get("execution_result") is not None:
         _result_page(draft, data); return
-    if mode is ScenarioType.TARGET_RANK and draft.get("target_solution") is not None:
-        _target_result(draft, data)
-        if st.button("بازگشت و ویرایش تحلیل"): return_to_edit(draft); st.rerun()
+    if mode is ScenarioType.TARGET_RANK and draft.get("current_step") == 2:
+        if not draft.get("target_execution_completed"):
+            draft["current_step"] = 1
+            st.rerun()
+        _target_final_results(draft, data)
         return
     _wizard_header(draft)
     step = draft["current_step"]
-    if step == 1: _select_focus(draft, data, outputs, user)
+    if mode is ScenarioType.TARGET_RANK:
+        if step == 1: _target_step_one(draft, data, outputs, user)
+        else: _target_final_results(draft, data)
+    elif step == 1: _select_focus(draft, data, outputs, user)
     elif not draft.get("focus_branch_id"): st.warning("ابتدا شعبه محوری را انتخاب کنید.")
     elif mode is ScenarioType.FOCUS_BRANCH_ONLY:
         if step == 2: _indicator_picker(draft, data, outputs)
@@ -1341,16 +1579,8 @@ def main() -> None:
         else:
             _review(draft, data)
             if st.button("اجرای سناریو", type="primary", width="stretch"): _execute(draft, data)
-    else:
-        if step == 2: _indicator_picker(draft, data, outputs)
-        elif step == 3: _target_settings(draft)
-        else:
-            _review_target = draft["target_rank_request"]
-            st.write(f"رتبه هدف: {_review_target.get('target_rank', '—')}")
-            st.write(f"تعداد شاخص‌های قابل تغییر: {len(draft['selected_indicator_ids'])}")
-            st.write(f"حداکثر رشد قابل بررسی: {format_percentage(_review_target.get('max_growth_percent'))}")
-            if st.button("محاسبه و پیشنهاد", type="primary", width="stretch"): _solve_target(draft, data)
-    _navigation(draft)
+    if mode is not ScenarioType.TARGET_RANK:
+        _navigation(draft)
 
 
 if __name__ == "__main__":

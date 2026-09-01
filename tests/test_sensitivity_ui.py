@@ -121,6 +121,25 @@ def test_indicator_deselection_removes_change_and_backend_results() -> None:
     assert draft["execution_result"] is None and not draft["show_result"]
 
 
+def test_target_rank_input_changes_clear_proposal_and_execution_state() -> None:
+    draft = new_scenario_draft(ScenarioType.TARGET_RANK)
+    draft.update(
+        focus_branch_id="103",
+        selected_indicator_ids=["avg_deposits", "avg_loans"],
+        target_comparison_result=object(),
+        target_execution_completed=True,
+        target_solution=object(),
+        show_result=True,
+    )
+    set_selected_indicators(draft, ["avg_deposits"])
+    assert draft["target_comparison_result"] is None
+    assert not draft["target_execution_completed"]
+    draft.update(target_comparison_result=object(), target_execution_completed=True)
+    set_focus_branch(draft, "2001")
+    assert draft["target_comparison_result"] is None
+    assert not draft["target_execution_completed"]
+
+
 def test_rule_override_deletion_and_return_to_edit_invalidate_results() -> None:
     draft = new_scenario_draft(ScenarioType.MULTI_BRANCH)
     draft.update(bulk_rules=[{"id": 1}], manual_overrides=[{"id": 2}],

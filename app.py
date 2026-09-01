@@ -78,6 +78,10 @@ def _open_saved(scenario_id: str, *, show_result: bool = False) -> None:
         loaded = _workspace_service().load_focus_scenario(
             scenario_id, baseline_data=data, periods=["1404-04"], restore_execution=show_result
         )
+    elif mode == ScenarioType.TARGET_RANK.value:
+        loaded = _workspace_service().load_target_scenario(
+            scenario_id, baseline_data=data, periods=["1404-04"], restore_execution=show_result
+        )
     else:
         loaded = _workspace_service().load_scenario(
             scenario_id, branch_ids=data["branch_id"].astype(str), periods=["1404-04"]

@@ -805,7 +805,186 @@ def test_multi_branch_result_css_is_scoped_and_does_not_modify_branch_or_target_
     assert ".results-workspace-header" not in scoped_css
     assert "target-rank" not in source.lower()
     assert "def _focus_result_page" in builder_source
-    assert "def _target_result" in builder_source
+    assert "def _target_final_results" in builder_source
+
+
+def test_target_rank_wizard_has_two_steps_and_no_active_growth_limit_controls() -> None:
+    source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    assert '("تعریف هدف و انتخاب شاخص‌ها", "نتایج سناریوی رتبه هدف")' in source
+    assert "بازبینی و اجرای دو مسیر" not in source
+    assert "مقایسه دو مسیر دستیابی" not in source.split("def _steps", 1)[1].split("def _wizard_header", 1)[0]
+    active_target_route = source.split("if mode is ScenarioType.TARGET_RANK:", 1)[1].split("elif step == 1", 1)[0]
+    assert "_target_settings" not in active_target_route
+    for legacy in ("حداکثر رشد قابل بررسی", "حداقل رشد قابل بررسی", "سقف رشد"):
+        assert legacy not in source
+
+
+def test_target_rank_branch_selection_and_execution_lifecycle_are_explicit() -> None:
+    source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    target_branch = source.split('if draft["scenario_type"] is ScenarioType.TARGET_RANK:', 1)[1].split('if draft["scenario_type"] is ScenarioType.MULTI_BRANCH:', 1)[0]
+    assert 'key="target_rank_branch_selector"' in target_branch
+    assert '"انتخاب شعبه" if item is None' in target_branch
+    assert "resolve_focus_branch(user, data)" not in target_branch
+    assert "_selected_branch_banner" not in target_branch
+    assert "target-rank-definition-panel" in target_branch
+    assert "target-rank-target-control" in target_branch
+    assert "target_execution_completed" in source
+    step_one_body = source.split("def _target_step_one", 1)[1].split("def _target_final_results", 1)[0]
+    assert "اجرای سناریو و مقایسه دو مسیر" in step_one_body
+    assert "target_comparison_result" in step_one_body
+    execute_body = source.split("def _execute_target_comparison", 1)[1].split("def _target_step_one", 1)[0]
+    assert "target_execution_completed" in execute_body
+    assert "target_comparison_proposal" not in source
+    main_target_body = source.split("if mode is ScenarioType.TARGET_RANK:", 1)[1].split("elif step == 1", 1)[0]
+    assert "_navigation(draft)" not in main_target_body
+    assert "مرحله بعد" not in main_target_body and "مرحله قبل" not in main_target_body
+
+
+def test_target_rank_step_one_explains_indicator_selection_paths() -> None:
+    source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    body = source.split("def _indicator_picker", 1)[1].split("def _focus_changes", 1)[0]
+    assert "شاخص‌های مسیر منتخب خود را مشخص کنید" in body
+    assert "هر ۸ شاخص رسمی مدل" in body
+    assert "مسیر منتخب: انتخاب کاربر" in body
+    assert "مسیر متوازن: هر ۸ شاخص" in body
+    assert "انتخاب شاخص به معنی تعیین درصد تغییر نیست" in body
+    assert "حداقل یک شاخص برای مسیر منتخب انتخاب کنید" in body
+    for description in ("متوسط مانده تسهیلات شعبه", "تعداد پرونده‌ها یا تسهیلات شعبه", "متوسط منابع سپرده‌ای شعبه"):
+        assert description not in body
+
+
+def test_target_rank_indicator_analysis_uses_cards_not_primary_dataframe() -> None:
+    source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    analysis_body = source.split("with tab_indicators:", 1)[1].split("with tab_audit:", 1)[0]
+    assert "_target_indicator_analysis_panel" in analysis_body
+    assert "target-rank-indicator-analysis" in source
+    assert "target-rank-indicator-card" in source
+    assert "target-rank-indicator-card-header" in source
+    assert "target-rank-indicator-name" in source
+    assert "target-rank-indicator-metrics" in source
+    assert "target-rank-indicator-footer" in source
+    assert "st.dataframe" not in analysis_body
+
+
+def test_target_rank_results_use_two_tabs_and_single_direct_comparison() -> None:
+    source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    result_body = source.split("def _target_final_results", 1)[1].split("def _navigation", 1)[0]
+    assert 'st.tabs(["تحلیل شاخص‌ها", "جزئیات و ممیزی"])' in result_body
+    assert "نمای مدیریتی" not in result_body
+    assert "tab_management" not in result_body
+    assert "مقایسه مستقیم دو مسیر" not in result_body
+    assert result_body.count("target-rank-result-grid") == 1
+    assert result_body.count("_target_path_card(comparison.balanced_all_indicators, phase=\"final\")") == 1
+    assert result_body.count("_target_path_card(comparison.user_selected_indicators, phase=\"final\")") == 1
+
+
+def test_target_rank_save_action_uses_simplified_label() -> None:
+    source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    result_body = source.split("def _target_final_results", 1)[1].split("def _navigation", 1)[0]
+    assert '"ذخیره سناریو"' in result_body
+    assert "هر دو نتیجه" not in result_body
+    assert "سناریو با موفقیت ذخیره شد." in source
+    assert "تغییرات سناریو با موفقیت ذخیره شد." in source
+
+
+def test_target_rank_styles_are_scoped_responsive_and_two_column() -> None:
+    source = Path("ui/styles.py").read_text(encoding="utf-8")
+    assert ".target-rank-path-grid" in source
+    assert ".target-rank-definition-panel" in source
+    assert ".wizard-steps.target-rank-wizard" in source
+    assert ".target-rank-proposal-grid" not in source
+    assert ".target-rank-review-grid" not in source
+    assert ".target-rank-execution-band" not in source
+    wizard_css = source[source.find(".wizard-steps.target-rank-wizard"):]
+    assert "minmax(240px,1fr) minmax(34px,.12fr) minmax(240px,1fr)" in wizard_css
+    assert "repeat(9" not in wizard_css
+    assert "grid-template-columns: repeat(2,minmax(0,1fr))" in source
+    assert "@media (max-width: 900px)" in source
+    builder_source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    assert 'data-target-path="' in builder_source
+    assert "nth-child" not in source[source.find(".target-rank-hero"):]
+
+
+def test_target_rank_result_hero_metadata_is_constrained_and_ltr_timestamp() -> None:
+    source = Path("ui/styles.py").read_text(encoding="utf-8")
+    hero_css = source[source.find(".target-rank-result-hero"):]
+    meta_css = source[source.find(".target-rank-result-meta-grid"):]
+    item_css = source[source.find(".target-rank-result-meta-item"):]
+    timestamp_css = source[source.find(".target-rank-result-timestamp"):]
+    assert "box-sizing: border-box" in hero_css
+    assert "width: 100%" in hero_css
+    assert "max-width: 100%" in hero_css
+    assert "min-width: 0" in hero_css
+    assert "overflow: hidden" in hero_css
+    assert "grid-template-columns: repeat(4,minmax(0,1fr))" in meta_css
+    assert "min-width: 0" in meta_css
+    assert "max-width: 100%" in meta_css
+    assert "min-width: 0" in item_css
+    assert "overflow: hidden" in item_css
+    assert "direction: ltr" in timestamp_css
+    assert "unicode-bidi: isolate" in timestamp_css
+    builder_source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    assert "target-rank-result-hero" in builder_source
+    assert "target-rank-result-meta-item" in builder_source
+    assert 'class="target-rank-result-timestamp" dir="ltr"' in builder_source
+
+
+def test_target_rank_result_paths_and_indicator_cards_do_not_overcompress() -> None:
+    source = Path("ui/styles.py").read_text(encoding="utf-8")
+    path_grid_css = source[source.find(".target-rank-path-grid, .target-rank-result-grid"):]
+    panel_css = source[source.find(".target-rank-path-panel"):]
+    kpi_grid_css = source[source.find(".target-rank-path-metrics, .target-rank-path-kpi-grid"):]
+    kpi_css = source[source.find(".target-rank-path-metrics span, .target-rank-path-kpi"):]
+    analysis_css = source[source.find(".target-rank-indicator-analysis > div"):]
+    name_css = source[source.find(".target-rank-indicator-name"):]
+    list_css = source[source.find(".target-rank-proposal-list, .target-rank-path-indicator-list"):]
+    included_css = source[source.find(".target-rank-included"):]
+    chips_css = source[source.find(".target-rank-included div, .target-rank-path-chips"):]
+    responsive_css = source[source.find("@media (max-width: 1100px)"):]
+    assert "grid-template-columns: repeat(2,minmax(0,1fr))" in path_grid_css
+    assert "width: 100%" in path_grid_css
+    assert "max-width: 100%" in path_grid_css
+    assert "min-width: 0" in path_grid_css
+    assert "align-items: start" in path_grid_css
+    assert "width: 100%" in panel_css
+    assert "max-width: 100%" in panel_css
+    assert "min-width: 0" in panel_css
+    assert "margin: 0" in panel_css
+    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in kpi_grid_css
+    assert "width: 100%" in kpi_grid_css
+    assert "max-width: 100%" in kpi_grid_css
+    assert "width: auto" in kpi_css
+    assert "max-width: 100%" in kpi_css
+    assert "margin-inline: 0" in kpi_css
+    assert "grid-template-columns: minmax(0,1fr)" in analysis_css
+    assert "word-break: normal" in name_css
+    assert "overflow-wrap: break-word" in name_css
+    assert "word-break: break-all" not in source[source.find(".target-rank-hero"):]
+    assert "overflow-wrap: anywhere" not in name_css.split("}", 1)[0]
+    assert "grid-auto-rows: auto" in list_css
+    assert "align-content: start" in list_css
+    assert "height: auto" in list_css
+    assert "min-height: 0" in list_css
+    assert "min-height: 0" in included_css
+    assert "flex-wrap: wrap" in chips_css
+    assert "max-width: 100%" in chips_css
+    assert ".target-rank-analysis-grid { grid-template-columns: minmax(0,1fr); }" in responsive_css
+    assert ".target-rank-path-metrics, .target-rank-path-kpi-grid { grid-template-columns: minmax(0,1fr); }" in responsive_css
+    target_rank_css = source[source.find(".target-rank-result-hero"):source.find('@media (max-width: 1100px) { .result-glance')]
+    assert "box-sizing: border-box" in target_rank_css
+    assert "margin-inline: -" not in target_rank_css
+    assert "translateX" not in target_rank_css
+    assert "calc(100% +" not in target_rank_css
+    assert "width: 101%" not in target_rank_css
+    builder_source = Path("pages/2_Scenario_Builder.py").read_text(encoding="utf-8")
+    result_body = builder_source.split("def _target_final_results", 1)[1].split("def _navigation", 1)[0]
+    assert 'type="checkbox"' not in result_body
+    assert "target-rank-path-panel" in builder_source
+    assert "target-rank-path-content" in builder_source
+    assert "target-rank-path-kpi-grid" in builder_source
+    assert "target-rank-path-kpi" in builder_source
+    assert "target-rank-path-chips" in builder_source
+    assert "target-rank-path-indicator-list" in builder_source
 
 
 def test_multi_branch_result_header_primary_panel_and_tabs_are_visual_contract() -> None:

@@ -16,6 +16,7 @@ from domain.scenario_contracts import (
     ScenarioRequest,
     ScenarioType,
     TargetRankRequest,
+    TargetRankComparisonResult,
     TargetRankSolution,
 )
 from engine.indicator_registry import INDICATOR_REGISTRY, PROFIT_LOSS_KEY, validate_indicator_value
@@ -139,6 +140,30 @@ def build_target_request(draft: dict[str, Any]) -> TargetRankRequest:
         minimum_growth_percent=float(settings.get("minimum_growth_percent", 0.0)),
         search_precision_percent=float(settings.get("search_precision_percent", 0.01)),
         allow_profit_loss=PROFIT_LOSS_KEY in selected,
+        period=draft.get("period"),
+    )
+
+
+def build_target_comparison_request(draft: dict[str, Any]) -> TargetRankRequest:
+    if draft.get("scenario_type") is not ScenarioType.TARGET_RANK:
+        raise ValueError("اطلاعات این حالت با سناریوی رتبه هدف سازگار نیست.")
+    settings = draft.get("target_rank_request", {})
+    selected = unique_indicator_ids(draft.get("selected_indicator_ids", []))
+    focus = str(draft.get("focus_branch_id") or "").strip()
+    if not focus:
+        raise ValueError("شعبه هدف باید انتخاب شود.")
+    if not selected:
+        raise ValueError("برای مسیر شاخص‌های منتخب کاربر، حداقل یک شاخص لازم است.")
+    return TargetRankRequest(
+        focus_branch_id=focus,
+        target_rank=int(settings["target_rank"]),
+        selected_indicator_ids=selected,
+        max_growth_percent=100.0,
+        tolerance_percent=0.01,
+        max_iterations=80,
+        minimum_growth_percent=0.0,
+        search_precision_percent=0.01,
+        allow_profit_loss=True,
         period=draft.get("period"),
     )
 
@@ -286,6 +311,10 @@ def target_solution_comparison(solution: TargetRankSolution) -> pd.DataFrame:
         return pd.DataFrame()
     from engine.comparison_engine import compare_model_outputs
     return compare_model_outputs(solution.baseline_outputs, solution.scenario_outputs).branch_comparison
+
+
+def target_path_results(comparison: TargetRankComparisonResult) -> tuple[Any, Any]:
+    return comparison.balanced_all_indicators, comparison.user_selected_indicators
 
 
 def service_error_message(message: str) -> str:

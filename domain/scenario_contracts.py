@@ -61,6 +61,14 @@ class TargetRankRequest:
 
 
 @dataclass(frozen=True)
+class TargetRankPath:
+    path_id: str
+    display_name: str
+    selected_indicator_ids: tuple[str, ...]
+    explanation: str
+
+
+@dataclass(frozen=True)
 class IndicatorProposal:
     indicator_id: str
     baseline_raw_value: float
@@ -124,6 +132,28 @@ class TargetRankSolution:
             TargetRankStatus.TARGET_REACHED,
             TargetRankStatus.NO_CHANGE_REQUIRED,
         }
+
+
+@dataclass(frozen=True)
+class TargetRankPathResult:
+    path: TargetRankPath
+    solution: TargetRankSolution
+
+    @property
+    def target_reached(self) -> bool:
+        return self.solution.target_reached
+
+
+@dataclass(frozen=True)
+class TargetRankComparisonResult:
+    focus_branch_id: str
+    target_rank: int
+    balanced_all_indicators: TargetRankPathResult
+    user_selected_indicators: TargetRankPathResult
+    baseline_outputs: ModelOutputs | None = field(default=None, repr=False, compare=False)
+    target_reached: bool = False
+    iterations: int = 0
+    message: str = ""
 
 
 @dataclass(frozen=True)

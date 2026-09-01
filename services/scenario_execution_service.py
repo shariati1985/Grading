@@ -11,6 +11,7 @@ from domain.scenario_contracts import (
     ScenarioRequest,
     ScenarioType,
     TargetRankRequest,
+    TargetRankComparisonResult,
     TargetRankSolution,
 )
 from engine.comparison_engine import ScenarioComparison, compare_model_outputs
@@ -61,6 +62,14 @@ class ScenarioExecutionService:
         from services.target_rank_solver import solve_target_rank
 
         return solve_target_rank(request, baseline_data)
+
+    def solve_target_rank_comparison(
+        self, request: TargetRankRequest, baseline_data: pd.DataFrame
+    ) -> TargetRankComparisonResult:
+        """Route the active Target Rank comparison through the service boundary."""
+        from services.target_rank_solver import solve_target_rank_comparison
+
+        return solve_target_rank_comparison(request, baseline_data)
 
     def execute(
         self, request: ScenarioRequest, baseline_data: pd.DataFrame
