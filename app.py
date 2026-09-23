@@ -162,6 +162,21 @@ def home_markup(*, branch_count: int, saved_count: str) -> str:
     )
 
 
+def overview_markup(*, branch_count: int, saved_count: str) -> str:
+    """Backward-compatible lightweight overview markup used by visual tests."""
+    period = _runtime_config().base_period.translate(
+        str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+    )
+    return (
+        '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
+        '<div class="home-overview-grid">'
+        f'<article><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{persian_digits(f"{branch_count:,}")}</b><small class="overview-label">شعبه فعال در سامانه</small></div></article>'
+        f'<article><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{html.escape(persian_digits(saved_count))}</b><small class="overview-label">سناریوهای من</small></div></article>'
+        f'<article><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{period}</b><small class="overview-label">دوره مبنای تحلیل</small></div></article>'
+        '</div>'
+    )
+
+
 def _render_management_overview(data, outputs, saved_count: str) -> None:
     repository = DashboardRepository(outputs, _runtime_config().base_period)
     overview = build_home_dashboard_overview(
