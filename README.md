@@ -1,55 +1,61 @@
-# Branch Grading Sensitivity Platform
+# پلتفرم تحلیل حساسیت درجه‌بندی شعب
 
-## Release
-- Handover version: **1.0.0**
-- Handover branch: `handover/grading-sensitivity-v1.0.0`
-- Baseline source branch: `feature/multi-branch-finalization`
-- Baseline commit: `df1bedb5de3098d3db7c5def77782d942121669b`
+## نسخه تحویلی
+- نسخه Handover: **1.0.0**
+- Branch تحویلی: `handover/grading-sensitivity-v1.0.0`
+- Branch مبنا: `feature/multi-branch-finalization`
+- Commit مبنا: `df1bedb5de3098d3db7c5def77782d942121669b`
 
-## Purpose
-This repository contains the current implementation of the branch grading sensitivity-analysis platform. It includes the ranking/scenario engines, Streamlit user interface, local prototype persistence, service layer, data-access layer, and automated tests.
+## هدف
+این Repository شامل نسخه فعلی سامانه تحلیل حساسیت درجه‌بندی شعب است و اجزای اصلی شامل موتور رتبه‌بندی، منطق سناریوها، رابط کاربری Streamlit، لایه Service، لایه دسترسی به داده، Persistence محلی و تست‌های خودکار را در بر می‌گیرد.
 
-## Current technical state
-The application is a functional prototype / pre-production handover baseline. The business logic and user workflows are implemented, but the following production integrations remain the responsibility of Bank IT:
+## وضعیت فعلی فنی
+سامانه در وضعیت Prototype عملیاتی و آماده تحویل برای تکمیل Production است. منطق کسب‌وکار و جریان‌های اصلی کاربر پیاده‌سازی شده‌اند، اما موارد زیر باید توسط فناوری بانک تکمیل شوند:
 
-1. Enterprise authentication and authorization.
-2. Production data-source integration in place of the local Excel baseline.
-3. Production SQL Server scenario persistence.
-4. Infrastructure, secrets management, logging, monitoring, backup, security hardening, and deployment.
-5. Final UAT and production release controls.
+1. اتصال احراز هویت سازمانی و Authorization.
+2. اتصال Production به AD و HRM.
+3. اتصال به Database داشبورد درجه‌بندی شعب.
+4. پیاده‌سازی Persistence سناریوها روی SQL Server.
+5. تکمیل زیرساخت، Secrets Management، Logging، Monitoring، Backup، Security Hardening و Deployment.
+6. اجرای UAT و کنترل‌های انتشار Production.
 
-## Main components
-- `app.py`: Streamlit entry point.
-- `engine/`: ranking, comparison, sensitivity and scenario logic.
-- `domain/`: scenario contracts and domain structures.
-- `services/`: application/workspace services.
-- `data/`: data contracts and repositories.
-- `persistence/`: local SQLite repository plus SQL Server production skeleton.
-- `ui/`: reusable UI and presentation components.
-- `pages/`: Streamlit pages.
-- `tests/`: automated tests.
-- `docs/`: architecture and handover documentation.
+## اجزای اصلی
+- `app.py`: نقطه ورود Streamlit.
+- `engine/`: منطق رتبه‌بندی، مقایسه، حساسیت و سناریو.
+- `domain/`: قراردادها و ساختارهای Domain.
+- `services/`: Serviceهای کاربردی و Workspace.
+- `data/`: قراردادهای داده و Repositoryها.
+- `persistence/`: Persistence محلی SQLite و اسکلت SQL Server.
+- `ui/`: اجزای قابل استفاده مجدد UI.
+- `pages/`: صفحات Streamlit.
+- `tests/`: تست‌های خودکار.
+- `docs/`: مستندات معماری، استقرار و Handover.
 
-## Local prototype execution
-1. Use Python 3.13 or a compatible supported Python version.
-2. Create and activate a virtual environment.
-3. Install dependencies:
+## اجرای نسخه Local
+1. Python 3.13 یا نسخه سازگار نصب شود.
+2. Virtual Environment ایجاد و فعال شود.
+3. وابستگی‌ها نصب شوند:
    ```bash
    pip install -r requirements.txt
    ```
-4. Supply the local baseline file `Data.xlsx` at repository root.
-5. Run:
+4. برای اجرای Local، فایل مبنای `Data.xlsx` در Root پروژه قرار گیرد.
+5. سامانه اجرا شود:
    ```bash
    streamlit run app.py
    ```
 
-> `Data.xlsx` is intentionally not part of the handover source branch. A sanitized test/sample data set should be provided separately if needed.
+> فایل `Data.xlsx` عمداً در Branch تحویلی نگهداری نمی‌شود. در صورت نیاز، داده تستی یا Sanitized باید جداگانه تأمین شود.
 
-## Production boundary
-The current `app.py` still reads the local Excel baseline and the local composition uses SQLite. These are explicit integration points, not hidden assumptions. Bank IT should replace/configure them for the production environment without changing the approved business rules.
+## مرز Production
+در Production، اطلاعات اصلی شعب و درجه‌بندی باید از Database داشبورد درجه‌بندی خوانده شود، احراز هویت از AD انجام شود و ساختار سازمانی کاربران جهت تعیین Data Scope از HRM تأمین گردد. سناریوهای ذخیره‌شده نیز باید در Database مستقل سامانه تحلیل حساسیت نگهداری شوند.
 
-See the handover documents:\n- `docs/DEPLOYMENT_HANDOVER.md` — production deployment checklist.\n- `docs/DATA_CONTRACT.md` — canonical input/output data contract.\n- `docs/INTEGRATION_CONTRACT.md` — production integration boundaries and acceptance criteria.
-- `docs/ACCESS_CONTROL_CONTRACT.md` — AD/HRM-based Data Scope and private scenario ownership rules.
+تکمیل Integrationها نباید موجب تغییر بدون مجوز در منطق مصوب درجه‌بندی و سناریوها شود.
 
-## Security
-Do not commit passwords, tokens, connection strings, production certificates, or real bank data. Use environment/configuration management and the bank's approved secret-management mechanism.
+## مستندات تحویل
+- `docs/DEPLOYMENT_HANDOVER.md` — الزامات استقرار و تحویل Production
+- `docs/DATA_CONTRACT.md` — قرارداد داده ورودی و خروجی
+- `docs/INTEGRATION_CONTRACT.md` — قرارداد Integration با سامانه‌ها و Databaseها
+- `docs/ACCESS_CONTROL_CONTRACT.md` — قواعد Data Scope و مالکیت خصوصی سناریوها
+
+## امنیت
+Password، Token، Connection String، Certificate، اطلاعات واقعی بانک و سایر Secrets نباید در Git نگهداری شوند. مقادیر Production باید از طریق سازوکار مورد تأیید بانک برای Configuration و Secrets Management تأمین شوند.
