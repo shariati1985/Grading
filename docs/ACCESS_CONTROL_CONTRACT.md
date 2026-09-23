@@ -1,92 +1,94 @@
-# Access Control & Data Scope Contract
+# قرارداد کنترل دسترسی و Data Scope
 
-## 1. Final agreed access model
-Access has two independent dimensions and they must not be mixed:
+## 1. مدل نهایی مورد توافق
+کنترل دسترسی در سامانه دو بعد مستقل دارد و این دو نباید با یکدیگر مخلوط شوند:
 
-1. **Data Scope** — which branches' grading data the user may view/analyze.
-2. **Scenario Ownership** — which saved scenarios the user may view/manage.
+1. **Data Scope**: کاربر مجاز است داده کدام شعب را مشاهده و تحلیل کند.
+2. **Scenario Ownership**: کاربر مجاز است سناریوهای ذخیره‌شده چه کسی را مشاهده و مدیریت کند.
 
-## 2. Source systems
+## 2. منابع اطلاعاتی
 
 ### Active Directory (AD)
-AD is the authentication source. It establishes the authenticated enterprise identity.
+AD منبع Authentication و شناسایی حساب سازمانی کاربر است.
 
 ### HRM
-HRM is the authoritative source for the user's organizational placement and structure used to determine access scope.
+HRM منبع جایگاه و ساختار سازمانی کاربر برای تعیین Data Scope است.
 
-HRM is **not** the source of branch master data or branch-to-region hierarchy for this application.
+HRM منبع اطلاعات شعب، مناطق یا شعب زیرمجموعه در این سامانه نیست.
 
-### Branch Grading Dashboard Database
-The grading-dashboard database is the authoritative source for:
-- branches;
-- regions;
-- branch-to-region/subordinate-branch relationships;
-- grading indicators;
-- scores;
-- ranks;
-- grades;
-- grading periods/history;
-- network-level dashboard information.
+### Database داشبورد درجه‌بندی شعب
+این Database منبع رسمی موارد زیر است:
+- شعب
+- مناطق
+- ارتباط شعب با مناطق
+- شعب زیرمجموعه هر منطقه
+- شاخص‌های درجه‌بندی
+- امتیازها
+- رتبه‌ها
+- درجات
+- دوره‌ها و تاریخچه درجه‌بندی
+- اطلاعات تحلیلی شبکه
 
-### Sensitivity Analysis Database
-The sensitivity-analysis database stores:
-- scenarios;
-- scenario versions;
-- changes;
-- results;
-- owner identity;
-- audit trail.
+### Database سامانه تحلیل حساسیت
+این Database نگهدارنده موارد زیر است:
+- سناریوها
+- نسخه‌های سناریو
+- تغییرات اعمال‌شده
+- نتایج
+- مالک سناریو
+- Audit Trail
 
-## 3. Data Scope rule
-The HRM adapter must translate the authenticated user's organizational placement into one of these application scope levels:
+## 3. قاعده Data Scope
+HRM باید جایگاه سازمانی کاربر احراز هویت‌شده را به یکی از Scopeهای زیر تبدیل کند:
 
-| Scope level | Allowed grading data |
+| سطح Scope | دامنه داده مجاز |
 |---|---|
-| `branch` | Only the user's own branch |
-| `region` | All branches subordinate to the user's region |
-| `head_office` | All branches in the network |
+| `branch` | فقط شعبه خود کاربر |
+| `region` | تمام شعب زیرمجموعه منطقه کاربر |
+| `head_office` | کل شبکه شعب |
 
-The actual branch list for a region must be resolved from the **grading-dashboard database**, not HRM.
+فهرست واقعی شعب زیرمجموعه هر منطقه باید از **Database داشبورد درجه‌بندی** خوانده شود، نه HRM.
 
-Therefore the flow is:
+Flow مورد توافق:
 
 ```text
-AD -> authenticated identity
-   -> HRM -> organizational scope level + organization reference
-   -> Grading Dashboard DB -> permitted branch IDs
-   -> Sensitivity Analysis application
+AD -> Authentication
+   -> HRM -> تعیین جایگاه سازمانی و Scope
+   -> Grading Dashboard DB -> استخراج branch_id های مجاز
+   -> Sensitivity Analysis Application
 ```
 
-## 4. Scenario Ownership rule
-Saved scenarios are private to their creator.
+## 4. قاعده Scenario Ownership
+سناریوهای ذخیره‌شده خصوصی و متعلق به ایجادکننده هستند.
 
-For every normal user:
-- list: only scenarios where `owner_user_id = current_user.user_id`;
-- read: only owned scenarios;
-- update: only owned scenarios;
-- execute/save result: only owned scenarios;
-- archive: only owned scenarios;
-- delete: only owned scenarios;
-- create-new-version/copy: source scenario must be owned by the same user.
+برای هر کاربر عادی:
+- فهرست سناریوها: فقط `owner_user_id = current_user.user_id`
+- مشاهده سناریو: فقط سناریوی خود کاربر
+- ویرایش: فقط سناریوی خود کاربر
+- اجرا و ذخیره نتیجه: فقط سناریوی خود کاربر
+- Archive: فقط سناریوی خود کاربر
+- حذف: فقط سناریوی خود کاربر
+- ایجاد نسخه جدید یا Copy: فقط از سناریوی متعلق به همان کاربر
 
-A branch manager cannot see another user's scenarios in the same branch.
-A regional user cannot see scenarios created by users in subordinate branches.
-A head-office user cannot see another user's scenarios merely because the user has network-wide data scope.
+در نتیجه:
+- مدیر یا کاربر شعبه، سناریوی کاربر دیگری در همان شعبه را نمی‌بیند.
+- کاربر منطقه، سناریوهای کاربران شعب زیرمجموعه را نمی‌بیند.
+- کاربر ستادی، با وجود Data Scope کل شبکه، سناریوی کاربر دیگری را نمی‌بیند.
 
-No inherited scenario visibility exists through organizational hierarchy.
+ساختار سازمانی موجب Inherited Visibility برای سناریوها نمی‌شود.
 
-## 5. Separation of Role and Scope
-A user's functional role and data scope are independent.
+## 5. جداسازی Role و Scope
+Functional Role و Data Scope دو مفهوم مستقل هستند.
 
-Examples:
-- a head-office Viewer may see network-wide grading data but may have read-only application functions;
-- a head-office Analyst may have the same data scope but may create/run scenarios;
-- a branch Analyst may create scenarios only with branch-level data scope.
+مثال:
+- کاربر ستادی با Role مشاهده‌گر ممکن است کل شبکه را ببیند ولی امکان ایجاد سناریو نداشته باشد.
+- کاربر ستادی با Role تحلیلگر ممکن است روی کل شبکه سناریو ایجاد کند.
+- کاربر شعبه‌ای با Role تحلیلگر فقط در Scope شعبه خود سناریو ایجاد می‌کند.
 
-Final functional roles can be defined separately. They must not change the Scenario Ownership rule unless an explicit future privileged role is approved.
+تعریف نهایی Roleها باید جداگانه انجام شود و نباید Scenario Ownership را تغییر دهد؛ مگر اینکه بعداً Permission ویژه‌ای به‌صورت رسمی تصویب شود.
 
-## 6. Application-level organization context
-The HRM integration should normalize the user's organizational placement into an application contract equivalent to:
+## 6. Contract جایگاه سازمانی
+HRM Integration باید جایگاه سازمانی کاربر را به Contract داخلی معادل زیر تبدیل کند:
 
 ```text
 user_id
@@ -94,27 +96,29 @@ organization_scope_level = branch | region | head_office
 organization_reference
 ```
 
-Where:
-- for `branch`, the reference identifies the user's branch;
-- for `region`, the reference identifies the user's region;
-- for `head_office`, no branch restriction is applied.
+تفسیر `organization_reference`:
+- در `branch`: مرجع شعبه کاربر
+- در `region`: مرجع منطقه کاربر
+- در `head_office`: محدودیت شعبه‌ای اعمال نمی‌شود
 
-The concrete HRM fields/API/table names remain an IT integration decision and are not assumed by this handover.
+نام واقعی Field، Table، API یا Endpoint در HRM باید توسط فناوری بانک مشخص شود و در این Handover فرض نشده است.
 
-## 7. Enforcement requirements
-Data scope must be enforced server-side/application-side before presenting data to the UI. Hiding UI controls alone is not authorization.
+## 7. الزامات Enforce دسترسی
+Data Scope باید در Backend/Application Enforce شود و صرفاً مخفی‌کردن Controlهای UI کافی نیست.
 
-At minimum:
-- dashboard queries must be restricted to permitted branch IDs;
-- scenario builders may select only permitted branch IDs;
-- persisted scenarios must not be loadable by another user ID;
-- direct URL/query-parameter access must not bypass scope/ownership;
-- audit logs must record user ID and relevant scenario actions.
+حداقل کنترل‌ها:
+- Queryهای داشبورد فقط Branch IDهای مجاز را بازگردانند.
+- Scenario Builder فقط اجازه انتخاب شعب مجاز را بدهد.
+- سناریوی کاربر دیگر از طریق URL یا Query Parameter قابل دسترسی نباشد.
+- تغییر مستقیم Request نباید Ownership یا Scope را دور بزند.
+- Audit Log باید `user_id` و Actionهای اصلی سناریو را ثبت کند.
 
-## 8. Current implementation status
-Scenario ownership is already enforced in the local SQLite implementation and service layer through `owner_user_id/requesting_user_id`.
+## 8. وضعیت فعلی پیاده‌سازی
+Scenario Ownership در Service و SQLite Repository فعلی از طریق `owner_user_id` و `requesting_user_id` واقعاً Enforce شده است.
 
-HRM-based Data Scope resolution is a production integration point. The handover code includes a pure application-level scope contract/resolver; Bank IT must implement the HRM adapter and grading-dashboard hierarchy repository that provide its inputs.
+Data Scope مبتنی بر HRM یک نقطه Integration برای Production است. در Handover یک Contract مستقل و Resolver برای Scope ایجاد شده است؛ فناوری بانک باید HRM Adapter و Repository مربوط به Hierarchy شعب در Database داشبورد درجه‌بندی را پیاده‌سازی کند.
 
-## 9. Future privileged access
-If the bank later requires Audit/Admin access to other users' scenarios, this must be introduced as a separate explicitly approved permission. It must not be inferred from branch/region/head-office Data Scope.
+## 9. دسترسی ویژه احتمالی در آینده
+اگر در آینده برای Audit یا Admin نیاز به مشاهده سناریوهای سایر کاربران باشد، این دسترسی باید به‌صورت Permission مستقل و مصوب اضافه شود.
+
+این دسترسی نباید صرفاً از Data Scope شعبه، منطقه یا ستاد استنتاج شود.
