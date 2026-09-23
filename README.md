@@ -56,6 +56,7 @@
 - `docs/DATA_CONTRACT.md` — قرارداد داده ورودی و خروجی
 - `docs/INTEGRATION_CONTRACT.md` — قرارداد Integration با سامانه‌ها و Databaseها
 - `docs/ACCESS_CONTROL_CONTRACT.md` — قواعد Data Scope و مالکیت خصوصی سناریوها
+- `docs/HOME_DASHBOARD_SPEC.md` — مشخصات صفحه اول مدیریتی و منابع داده آن
 
 ## امنیت
 Password، Token، Connection String، Certificate، اطلاعات واقعی بانک و سایر Secrets نباید در Git نگهداری شوند. مقادیر Production باید از طریق سازوکار مورد تأیید بانک برای Configuration و Secrets Management تأمین شوند.
