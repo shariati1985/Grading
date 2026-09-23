@@ -1,25 +1,25 @@
-# Canonical Data Contract
+# قرارداد داده
 
-## 1. Purpose
-This contract defines the minimum branch-level input dataset required by the grading and sensitivity-analysis engine. Bank IT may supply the data through SQL Server, a database view, API/ESB, or another approved integration mechanism, but the adapter presented to the application must return this canonical schema without changing business semantics.
+## 1. هدف
+این سند حداقل داده موردنیاز موتور درجه‌بندی و تحلیل حساسیت شعب را مشخص می‌کند. در Production، منبع اصلی اطلاعات شعب و درجه‌بندی Database داشبورد درجه‌بندی شعب است. Adapter متصل به سامانه باید داده را مطابق Schema استاندارد زیر در اختیار Application قرار دهد، بدون اینکه منطق کسب‌وکار را تغییر دهد.
 
-## 2. Canonical input schema
+## 2. Schema استاندارد ورودی
 
-| Field | Persian meaning | Logical type | Required | Current engine/repository rule |
-|---|---|---:|---:|---|
-| `branch_id` | کد شعبه | string | Yes | Non-blank and unique. Leading zeros must be preserved. |
-| `branch_name` | نام شعبه | string | Yes | Non-blank. Persian/Arabic character variants and whitespace are normalized by the Excel adapter. |
-| `region` | منطقه | string | Yes | Text value; current Excel adapter normalizes Persian/Arabic characters and whitespace. |
-| `avg_deposits` | میانگین سپرده‌ها | numeric | Yes | Numeric. Current Excel adapter converts non-numeric/blank input to 0. |
-| `deposit_count` | تعداد سپرده‌ها | numeric | Yes | Numeric. Registry minimum is 0 for scenario validation. |
-| `avg_loans` | میانگین تسهیلات | numeric | Yes | Numeric. Registry minimum is 0 for scenario validation. |
-| `loan_count` | تعداد تسهیلات | numeric | Yes | Numeric. Registry minimum is 0 for scenario validation. |
-| `avg_commitments` | میانگین تعهدات | numeric | Yes | Numeric. Registry minimum is 0 for scenario validation. |
-| `commitment_count` | تعداد تعهدات | numeric | Yes | Numeric. Registry minimum is 0 for scenario validation. |
-| `transaction_volume` | حجم عملیات | numeric | Yes | Numeric. Registry minimum is 0 for scenario validation. |
-| `profit_loss` | سود (زیان) | numeric | Yes | Numeric; negative values are allowed. |
+| فیلد | مفهوم | نوع منطقی | الزامی | قاعده فعلی |
+|---|---|---|---|---|
+| `branch_id` | کد شعبه | string | بله | خالی نباشد و Unique باشد؛ صفرهای ابتدایی حفظ شوند. |
+| `branch_name` | نام شعبه | string | بله | خالی نباشد. |
+| `region` | منطقه | string | بله | مقدار متنی منطقه. |
+| `avg_deposits` | میانگین سپرده‌ها | numeric | بله | مقدار عددی. |
+| `deposit_count` | تعداد سپرده‌ها | numeric | بله | حداقل مقدار مجاز در Scenario Validation برابر صفر است. |
+| `avg_loans` | میانگین تسهیلات | numeric | بله | حداقل مقدار مجاز صفر است. |
+| `loan_count` | تعداد تسهیلات | numeric | بله | حداقل مقدار مجاز صفر است. |
+| `avg_commitments` | میانگین تعهدات | numeric | بله | حداقل مقدار مجاز صفر است. |
+| `commitment_count` | تعداد تعهدات | numeric | بله | حداقل مقدار مجاز صفر است. |
+| `transaction_volume` | حجم عملیات | numeric | بله | حداقل مقدار مجاز صفر است. |
+| `profit_loss` | سود (زیان) | numeric | بله | مقدار منفی مجاز است. |
 
-The canonical field order is:
+ترتیب استاندارد فیلدها:
 
 ```text
 branch_id
@@ -35,9 +35,9 @@ transaction_volume
 profit_loss
 ```
 
-## 3. Source-to-canonical mapping used by the current Excel prototype
+## 3. Mapping نسخه Excel فعلی
 
-| Current Persian source column | Canonical field |
+| ستون فارسی | فیلد استاندارد |
 |---|---|
 | کد شعبه | `branch_id` |
 | نام شعبه | `branch_name` |
@@ -51,31 +51,31 @@ profit_loss
 | حجم عملیات | `transaction_volume` |
 | سود (زیان) | `profit_loss` |
 
-Rows whose branch name is equivalent to `اوزان`, `وزن`, `weight`, or `weights` are excluded by the current Excel adapter and must not be emitted as branch rows by a production source.
+ردیف‌هایی با نام `اوزان`، `وزن`، `weight` یا `weights` در Adapter فعلی Excel به‌عنوان شعبه محسوب نمی‌شوند.
 
-## 4. Identity and uniqueness rules
-- `branch_id` is the application-level branch key.
-- It must be supplied as text or converted losslessly to text.
-- Leading zeros are significant and must not be discarded.
-- Blank `branch_id` values are rejected.
-- Duplicate `branch_id` values are rejected for one loaded baseline population.
-- Blank `branch_name` values are rejected.
+## 4. قواعد شناسه و یکتایی
+- `branch_id` شناسه اصلی شعبه در Application است.
+- مقدار آن باید به‌صورت Text قابل استفاده باشد.
+- صفرهای ابتدایی نباید حذف شوند.
+- مقدار خالی مجاز نیست.
+- برای یک Population مبنا، `branch_id` تکراری مجاز نیست.
+- `branch_name` خالی مجاز نیست.
 
-## 5. Numeric handling
-The current Excel adapter:
-1. normalizes Persian/Arabic digits to English digits;
-2. removes common thousands separators;
-3. normalizes minus-sign variants;
-4. attempts numeric conversion;
-5. converts blank/non-numeric values to `0.0`.
+## 5. مقادیر عددی
+در Adapter فعلی Excel:
+1. ارقام فارسی و عربی به ارقام لاتین تبدیل می‌شوند.
+2. جداکننده‌های رایج هزارگان حذف می‌شوند.
+3. علامت‌های مختلف منفی Normalize می‌شوند.
+4. Numeric Conversion انجام می‌شود.
+5. مقدار خالی یا غیرعددی به `0.0` تبدیل می‌شود.
 
-The core ranking engine also converts non-numeric indicator values to numeric and fills conversion failures with `0.0`.
+موتور اصلی نیز در ورودی خود مقادیر غیرعددی شاخص‌ها را به Numeric تبدیل کرده و خطاهای Conversion را با `0.0` جایگزین می‌کند.
 
-This is the **current implemented behavior**, not a recommendation that production source systems silently replace invalid data with zero. For production integration, data-quality errors should preferably be identified upstream and reported before the canonical dataset reaches the engine. Any decision to change the current zero-fill semantics must be treated as a business-rule change and regression-tested.
+این موضوع صرفاً **رفتار فعلی پیاده‌سازی** است. در Production توصیه می‌شود خطاهای Data Quality پیش از رسیدن داده به موتور شناسایی و گزارش شوند. تغییر رفتار Zero-Fill یک تغییر Business Rule محسوب می‌شود و نیازمند تأیید و Regression Test است.
 
-## 6. Indicator direction and current official weights
+## 6. شاخص‌ها و اوزان مصوب فعلی
 
-| Indicator | Direction | Weight |
+| شاخص | Direction | Weight |
 |---|---|---:|
 | `avg_deposits` | benefit | 0.500 |
 | `deposit_count` | benefit | 0.005 |
@@ -86,16 +86,18 @@ This is the **current implemented behavior**, not a recommendation that producti
 | `transaction_volume` | benefit | 0.015 |
 | `profit_loss` | benefit | 0.030 |
 
-The weights sum to 1.0. The production integration layer must provide raw indicator values only; it must not pre-normalize or re-weight them unless a formally approved model change is introduced.
+مجموع Weightها برابر 1.0 است.
 
-## 7. Period
-The current prototype has one configured baseline period. The runtime exposes `BASE_PERIOD` as an external configuration value.
+لایه Integration باید Raw Value شاخص‌ها را تحویل دهد و نباید پیش از ورود به موتور، Normalization یا Re-Weighting مستقلی انجام دهد؛ مگر اینکه تغییر مدل به‌صورت رسمی تصویب شده باشد.
 
-The existing canonical input dataframe does **not** contain a `period_id` column. The period is currently supplied separately to the repository/runtime contract. If Bank IT requires multi-period storage, the source implementation may store period information internally, but each call to `load_branch_data(period)` must return the single requested branch population in the canonical schema above.
+## 7. دوره
+دوره مبنا از طریق `BASE_PERIOD` قابل تنظیم است.
 
-## 8. Output contracts exposed by the model/dashboard layer
+در Contract فعلی، `period_id` داخل DataFrame ورودی قرار ندارد و Period به‌صورت جداگانه به Repository داده می‌شود. در صورت چنددوره‌ای بودن Database، متد `load_branch_data(period)` باید فقط Population مربوط به Period درخواستی را در Schema استاندارد برگرداند.
 
-### Branch summary
+## 8. قرارداد خروجی‌های داشبورد
+
+### خلاصه شعب
 ```text
 branch_id
 branch_code
@@ -112,7 +114,7 @@ rank_change
 calculation_timestamp
 ```
 
-### Branch-indicator detail
+### جزئیات شاخص‌های شعب
 ```text
 branch_id
 branch_code
@@ -128,7 +130,7 @@ weight
 weighted_contribution
 ```
 
-### Indicator definitions
+### تعاریف شاخص‌ها
 ```text
 indicator_id
 indicator_name
@@ -136,24 +138,24 @@ weight
 direction
 ```
 
-### Period list
+### فهرست دوره‌ها
 ```text
 period_id
 period_label
 ```
 
-The dashboard repository exposes engine results; it does not recalculate model values independently.
+Dashboard Repository فقط خروجی Engine را ارائه می‌کند و نباید محاسبات مدل را به‌صورت مستقل تکرار کند.
 
-## 9. Acceptance checks for the production data adapter
-Before UAT, Bank IT should demonstrate that:
-- all 11 canonical columns are returned;
-- no branch has a blank or duplicate `branch_id`;
-- leading-zero branch identifiers are preserved;
-- branch names are non-blank;
-- all eight indicator fields are numeric at the application boundary;
-- the requested period returns the intended population;
-- the same approved baseline dataset produces the same model results as the handover baseline;
-- source adapters do not calculate their own normalized score, rank, grade, or weighted score.
+## 9. کنترل‌های پذیرش Data Adapter
+پیش از UAT باید حداقل موارد زیر کنترل شوند:
+- هر 11 فیلد استاندارد موجود باشد.
+- `branch_id` خالی یا تکراری وجود نداشته باشد.
+- صفرهای ابتدایی شناسه شعب حفظ شوند.
+- نام شعبه خالی نباشد.
+- هر 8 شاخص در مرز Application مقدار Numeric داشته باشند.
+- Period درخواستی Population صحیح را بازگرداند.
+- یک Dataset یکسان، نتایج یکسان با Baseline مصوب ایجاد کند.
+- Adapter منبع داده نباید مستقلاً `normalized_score`، رتبه، درجه یا `weighted_score` محاسبه کند.
 
-## 10. Change control
-Changing field meaning, aggregation basis, units, period semantics, null handling, indicator direction, weights, or population rules can alter ranking results. Such changes require explicit business-owner approval and regression testing.
+## 10. کنترل تغییر
+تغییر در مفهوم فیلد، واحد اندازه‌گیری، روش تجمیع، Period، Null Handling، Direction شاخص، Weight یا Population می‌تواند نتیجه رتبه‌بندی را تغییر دهد. هر تغییر از این نوع نیازمند تأیید Business Owner و Regression Test است.
