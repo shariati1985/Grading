@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import html
 import streamlit as st
+import plotly.express as px
 
 from pathlib import Path
 
 from domain.scenario_contracts import ScenarioType
 from ui import initialize_session_state
 from ui.components import render_empty_state
-from config.runtime import load_runtime_config\nfrom ui.data_access import load_configured_dashboard_data
+from config.runtime import load_runtime_config
+from data.dashboard_repository import DashboardRepository
+from services.home_dashboard_service import build_home_dashboard_overview
+from ui.data_access import load_configured_dashboard_data
 from ui.sensitivity_labels import SCENARIO_TYPE_LABELS
 from ui.sensitivity_components import render_scenario_cards
 from ui.navigation import (
@@ -20,7 +24,7 @@ from ui.navigation import (
     icon_svg,
     scenario_href,
 )
-from ui.formatters import persian_digits
+from ui.formatters import persian_digits, format_grade, format_persian_number
 from services.factory import create_scenario_service
 from services.multi_branch_workspace_service import (
     SCENARIO_TYPE as MULTI_BRANCH_SCENARIO_TYPE,
@@ -30,6 +34,7 @@ from services.multi_branch_workspace_service import (
 from services.scenario_workspace_service import PERSISTENCE_STATUS_LABELS, ScenarioWorkspaceService
 from persistence.contracts import ScenarioPersistenceError
 from ui.styles import apply_global_styles
+from ui.charts import apply_chart_layout, render_chart
 
 st.set_page_config(
     page_title="پلتفرم تحلیل حساسیت درجه‌بندی شعب",
@@ -42,23 +47,28 @@ st.set_page_config(
 ROOT = Path(__file__).resolve().parent
 
 
+@st.cache_resource
+def _runtime_config():
+    return load_runtime_config(ROOT)
+
+
 @st.cache_data(show_spinner="در حال بارگذاری اطلاعات مبنا...")
 def _context():
-    return load_dashboard_data(ROOT / "Data.xlsx", "1404-04")
+    return load_configured_dashboard_data(ROOT, _runtime_config())
 
 
 @st.cache_resource
 def _workspace_service() -> ScenarioWorkspaceService:
-    return ScenarioWorkspaceService(create_local_scenario_service(ROOT))
+    return ScenarioWorkspaceService(create_scenario_service(ROOT, _runtime_config()))
 
 
 @st.cache_resource
 def _multi_branch_service() -> MultiBranchWorkspaceService:
-    return MultiBranchWorkspaceService(create_local_scenario_service(ROOT))
+    return MultiBranchWorkspaceService(create_scenario_service(ROOT, _runtime_config()))
 
 
 def _open_saved(scenario_id: str, *, show_result: bool = False) -> None:
-    data, _ = _context()
+    data, outputs = _context()
     record = next((item for item in _workspace_service().list_scenarios(limit=100) if item.scenario_id == scenario_id), None)
     mode = None if record is None else record.summary.get("scenario_type")
     if mode == MULTI_BRANCH_SCENARIO_TYPE:
@@ -152,27 +162,102 @@ def home_markup(*, branch_count: int, saved_count: str) -> str:
     )
 
 
-def overview_markup(*, branch_count: int, saved_count: str) -> str:
-    document_icon = (
-        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h8l3 3V20h-11z"/>'
-        '<path d="M14.5 3.5v3h3"/><path d="M9 11h6"/><path d="M9 15h6"/></svg>'
-    )
-    clock_icon = (
-        '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/>'
-        '<path d="M12 7.5V12l3.25 2"/></svg>'
-    )
-    period = _runtime_config().base_period.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
-    return (
-        '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
-        '<div class="home-overview-grid">'
-        f'<article><span class="overview-icon">{icon_svg("bank")}</span><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{persian_digits(f"{branch_count:,}")}</b><small class="overview-label">شعبه فعال در سامانه</small></div></article>'
-        f'<article><span class="overview-icon">{document_icon}</span><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{html.escape(persian_digits(saved_count))}</b><small class="overview-label">سناریوی ذخیره‌شده توسط کاربران</small></div></article>'
-        f'<article><span class="overview-icon">{clock_icon}</span><div class="overview-content"><b class="overview-value numeric-fa" dir="rtl">{period}</b><small class="overview-label">دوره مبنای تحلیل</small></div></article>'
-        '</div>'
+def _render_management_overview(data, outputs, saved_count: str) -> None:
+    repository = DashboardRepository(outputs, _runtime_config().base_period)
+    overview = build_home_dashboard_overview(
+        repository.load_branch_summary(),
+        repository.load_branch_indicators(),
+        period_id=_runtime_config().base_period,
     )
 
+    st.markdown('<h2 class="home-section-title">نمای کلی مدیریتی</h2>', unsafe_allow_html=True)
 
-def render_home_page(data, saved_count: str) -> None:
+    cards = st.columns(5)
+    cards[0].metric("تعداد شعب", format_persian_number(overview.branch_count))
+    cards[1].metric("تعداد مناطق", format_persian_number(overview.region_count))
+    cards[2].metric(
+        "میانگین امتیاز",
+        "—" if overview.average_final_score is None else format_persian_number(overview.average_final_score, 1),
+    )
+    cards[3].metric("دوره مبنا", persian_digits(overview.period_id))
+    cards[4].metric("سناریوهای من", persian_digits(saved_count))
+
+    left, right = st.columns(2)
+    with left:
+        grade_frame = overview.grade_distribution.copy()
+        grade_frame["درجه"] = grade_frame["grade"].map(format_grade)
+        figure = px.bar(
+            grade_frame,
+            x="درجه",
+            y="branch_count",
+            labels={"branch_count": "تعداد شعب", "درجه": "درجه"},
+        )
+        apply_chart_layout(
+            figure,
+            title="توزیع درجات شعب",
+            height=380,
+            show_legend=False,
+            left_margin=70,
+        )
+        render_chart(figure, key="home_grade_distribution")
+
+    with right:
+        region_frame = overview.region_summary.copy()
+        figure = px.bar(
+            region_frame.sort_values("average_final_score"),
+            x="average_final_score",
+            y="region_name",
+            orientation="h",
+            labels={"average_final_score": "میانگین امتیاز", "region_name": "منطقه"},
+        )
+        apply_chart_layout(
+            figure,
+            title="میانگین امتیاز شعب به تفکیک منطقه",
+            height=380,
+            show_legend=False,
+            left_margin=120,
+        )
+        render_chart(figure, key="home_region_scores")
+
+    indicator_frame = overview.indicator_profile.copy()
+    figure = px.bar(
+        indicator_frame.sort_values("average_normalized_score"),
+        x="average_normalized_score",
+        y="indicator_name",
+        orientation="h",
+        labels={"average_normalized_score": "میانگین امتیاز نرمال‌شده", "indicator_name": "شاخص"},
+    )
+    figure.update_xaxes(range=[0, 1000])
+    apply_chart_layout(
+        figure,
+        title="نمای ۸ شاخص اصلی در محدوده دسترسی کاربر",
+        height=430,
+        show_legend=False,
+        left_margin=170,
+    )
+    render_chart(figure, key="home_indicator_profile")
+
+    if not overview.rank_movers.empty:
+        movers = overview.rank_movers.head(10).copy()
+        movers["شعبه"] = movers["branch_name"].astype(str)
+        figure = px.bar(
+            movers.sort_values("rank_change"),
+            x="rank_change",
+            y="شعبه",
+            orientation="h",
+            labels={"rank_change": "تغییر رتبه", "شعبه": "شعبه"},
+        )
+        apply_chart_layout(
+            figure,
+            title="بیشترین تغییرات رتبه نسبت به دوره قبل",
+            height=390,
+            show_legend=False,
+            left_margin=150,
+        )
+        render_chart(figure, key="home_rank_movers")
+
+
+def render_home_page(data, outputs, saved_count: str) -> None:
     st.markdown(
         home_markup(
             branch_count=len(data),
@@ -180,8 +265,9 @@ def render_home_page(data, saved_count: str) -> None:
         ),
         unsafe_allow_html=True,
     )
+    _render_management_overview(data, outputs, saved_count)
+    st.markdown('<h2 class="home-section-title">انتخاب نوع سناریو</h2>', unsafe_allow_html=True)
     render_scenario_cards()
-    st.markdown(overview_markup(branch_count=len(data), saved_count=saved_count), unsafe_allow_html=True)
 
 
 def render_saved_scenarios_view(data, records) -> None:
@@ -279,7 +365,7 @@ def main() -> None:
         render_saved_scenarios_view(data, records)
         return
     saved_count = "نامشخص" if records is None else f"{len(records):,}"
-    render_home_page(data, saved_count)
+    render_home_page(data, outputs, saved_count)
 
 
 if __name__ == "__main__":
