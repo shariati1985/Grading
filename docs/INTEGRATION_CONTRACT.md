@@ -1,189 +1,178 @@
-# Integration Contract
+# قرارداد Integration
 
-## 1. Objective
-This document identifies the production integration boundaries that Bank IT must implement around the handover source. It separates approved business/model behavior from environment-specific technical integration.
+## 1. هدف
+این سند مرزهای Integration سامانه تحلیل حساسیت درجه‌بندی شعب با سامانه‌ها و Databaseهای بانک را مشخص می‌کند و مسئولیت‌های فنی را از قواعد کسب‌وکار جدا نگه می‌دارد.
 
-## 2. Integration boundaries
+## 2. مرزهای Integration
 
-| Boundary | Current prototype | Production target | Status in handover |
+| حوزه | وضعیت فعلی | هدف Production | وضعیت در Handover |
 |---|---|---|---|
-| Authentication | Local user file | Active Directory (AD) | Enterprise adapter pending |
-| Organizational access context | Local user metadata | HRM | HRM adapter pending |
-| Branch master, region hierarchy & grading data | Local Excel workbook | Branch Grading Dashboard Database | Adapter point exists; production DB implementation pending |
-| Scenario persistence | Local SQLite | Sensitivity Analysis SQL Server Database | Contract/skeleton present; implementation pending |
-| Runtime configuration | Local defaults / environment | Bank deployment & secret management | Externalized |
-| Logging / audit / monitoring | Local application behavior | Central bank services | Required from Bank IT |
+| Authentication | Local User | Active Directory (AD) | Adapter سازمانی باید تکمیل شود |
+| تعیین جایگاه سازمانی کاربر | Local Metadata | HRM | HRM Adapter باید تکمیل شود |
+| اطلاعات شعب، مناطق و داده درجه‌بندی | Excel محلی | Database داشبورد درجه‌بندی شعب | نقطه اتصال ایجاد شده؛ پیاده‌سازی Production باقی است |
+| Persistence سناریو | SQLite محلی | SQL Server سامانه تحلیل حساسیت | Contract موجود؛ پیاده‌سازی Production باقی است |
+| Runtime Configuration | Local Default / Environment | سازوکار Deployment بانک | Externalized شده |
+| Logging / Audit / Monitoring | محدود به نسخه فعلی | سرویس‌های مرکزی بانک | باید تکمیل شود |
 
-## 3. Production source-system architecture
+## 3. معماری منابع Production
+معماری مورد توافق شامل این منابع است:
 
-The agreed production architecture uses three authoritative external sources:
+- **AD** برای Authentication.
+- **HRM** برای تعیین جایگاه سازمانی کاربر و سطح Data Scope.
+- **Database داشبورد درجه‌بندی شعب** برای اطلاعات شعب، مناطق، شعب زیرمجموعه، شاخص‌ها، امتیازها، رتبه‌ها، درجات، دوره‌ها، تاریخچه و اطلاعات تحلیلی صفحه اول.
+- **Database سامانه تحلیل حساسیت** برای نگهداری سناریوها، نسخه‌ها، تغییرات، نتایج و Audit Trail.
 
-- **AD** for authentication.
-- **HRM** for organizational structure used to determine the user's access scope.
-- **Branch Grading Dashboard Database** for branch master data, regions, branch-to-region/subordinate relationships, indicators, scores, ranks, grades, periods/history, and dashboard analytics.
+HRM منبع اطلاعات شعب و منطقه نیست. HRM فقط مشخص می‌کند کاربر از نظر سازمانی شعبه‌ای، منطقه‌ای یا ستادی است. سپس فهرست واقعی شعب مجاز از Database داشبورد درجه‌بندی تعیین می‌شود.
 
-HRM must not be used as the source of branch hierarchy for grading analysis. Once HRM determines whether the user is branch-level, region-level, or head-office, the actual permitted branch set is resolved from the Branch Grading Dashboard Database.
+سناریوهای ذخیره‌شده کاملاً شخصی هستند و به مالک سناریو تعلق دارند.
 
-Saved scenarios are stored separately in the Sensitivity Analysis Database and remain private to their owner.
+برای جزئیات دسترسی به `docs/ACCESS_CONTROL_CONTRACT.md` مراجعه شود.
 
-See `docs/ACCESS_CONTROL_CONTRACT.md`.
+## 4. اتصال به Database داشبورد درجه‌بندی
 
-## 4. Branch grading dashboard database integration
-
-### Application contract
-The application calls:
+### Contract Application
+Application در سطح Repository متدی معادل زیر فراخوانی می‌کند:
 
 ```python
 load_branch_data(period: str | None) -> DataFrame
 ```
 
-The returned dataframe must conform exactly to `docs/DATA_CONTRACT.md`.
+خروجی باید مطابق `docs/DATA_CONTRACT.md` باشد.
 
-### Current production skeleton
-`SqlServerBranchRepository` exists as the SQL Server adapter boundary. It currently raises `NotImplementedError` until Bank IT selects the approved driver/query strategy.
+### وضعیت فعلی
+کلاس `SqlServerBranchRepository` به‌عنوان مرز اتصال SQL Server وجود دارد، اما تا زمان انتخاب Driver و Query Strategy مورد تأیید فناوری بانک، پیاده‌سازی Production آن تکمیل نشده است.
 
-Runtime settings:
+Runtime Settingهای مرتبط:
 - `DATA_SOURCE_TYPE=sqlserver`
 - `DATA_SOURCE_CONNECTION_STRING`
 - `DATA_SOURCE_TABLE_OR_VIEW`
 - `BASE_PERIOD`
 
-### Recommended implementation responsibilities
-The implementation should:
-- use parameterized SQL or an approved ORM/driver;
-- filter by the requested period where the source is multi-period;
-- return only the canonical branch schema;
-- preserve branch identifiers as text;
-- avoid embedding credentials in source;
-- fail clearly on connection/schema errors;
-- support operational timeout and logging standards required by the bank.
+### الزامات پیاده‌سازی
+پیاده‌سازی Production باید:
+- از Parameterized SQL یا ORM/Driver مورد تأیید استفاده کند.
+- در صورت چنددوره‌ای بودن منبع، Period درخواستی را فیلتر کند.
+- فقط Schema استاندارد را به Engine تحویل دهد.
+- شناسه شعب را بدون تغییر معنایی حفظ کند.
+- Credential را در Source Code قرار ندهد.
+- خطاهای Connection و Schema را صریح گزارش کند.
+- Timeout و Logging مطابق استاندارد بانک داشته باشد.
 
-The choice of DB view, stored procedure, API, ESB, or DWH endpoint is an infrastructure/integration decision for Bank IT, provided the application contract is preserved.
+نام View، Stored Procedure یا ساختار فیزیکی Database باید با فناوری بانک نهایی شود و در این Handover فرض نشده است.
 
-## 5. Scenario persistence integration
+## 5. اتصال Persistence سناریوها
 
-### Current prototype
-Local scenarios are stored in SQLite.
+### وضعیت فعلی
+نسخه Local از SQLite استفاده می‌کند.
 
-### Production boundary
-`SqlServerScenarioRepository` defines the required repository operations:
-- create scenario;
-- update scenario;
-- get scenario;
-- list scenarios;
-- delete scenario;
-- archive scenario;
-- copy scenario.
+### هدف Production
+`SqlServerScenarioRepository` باید عملیات زیر را روی SQL Server پیاده‌سازی کند:
+- ایجاد سناریو
+- ویرایش سناریو
+- دریافت سناریو
+- فهرست سناریوها
+- حذف سناریو
+- Archive سناریو
+- ایجاد نسخه/Copy سناریو
 
-The production implementation must preserve:
-- ownership checks;
-- requesting-user context;
-- optimistic concurrency using row version;
-- atomic updates;
-- server-side list pagination;
-- persisted scenario changes;
-- persisted result summaries.
+پیاده‌سازی Production باید موارد زیر را حفظ کند:
+- Ownership Check
+- `requesting_user_id`
+- Optimistic Concurrency با `row_version`
+- Atomic Update
+- Server-Side Pagination
+- ذخیره تغییرات سناریو
+- ذخیره خلاصه نتایج
 
-The existing SQL Server class is intentionally a skeleton and must not be represented as a completed production repository.
+کلاس فعلی SQL Server فقط Skeleton است و نباید به‌عنوان Persistence کامل Production تلقی شود.
 
-Runtime settings:
+Runtime Settingهای مرتبط:
 - `SCENARIO_DB_TYPE=sqlserver`
 - `SCENARIO_DB_CONNECTION_STRING`
 
-## 6. Identity and HRM integration
+## 6. اتصال AD و HRM
 
-### Current prototype
-`CurrentUser` contains:
+### مدل کاربر
+`CurrentUser` در Application شامل موارد زیر است:
 - `user_id`
 - `display_name`
 - `roles`
-- optional `branch_id`
-- optional `branch_code`
-- optional `branch_name`
+- اطلاعات اختیاری مرتبط با شعبه
 
-The local implementation reads this object from `config/local_user.json`.
+### Production
+با `AUTH_MODE=enterprise`:
+1. کاربر از طریق AD احراز هویت می‌شود.
+2. شناسه کاربر به Contract داخلی `CurrentUser` نگاشت می‌شود.
+3. HRM جایگاه سازمانی کاربر را مشخص می‌کند.
+4. Application جایگاه را به یکی از Scopeهای `branch`، `region` یا `head_office` تبدیل می‌کند.
+5. فهرست شعب مجاز از Database داشبورد درجه‌بندی دریافت می‌شود.
 
-### Production target
-With `AUTH_MODE=enterprise`, Bank IT must authenticate the user through AD and map that identity into the application's `CurrentUser` contract.
+جزئیات Protocol، Endpoint، Table، Field و Credential مربوط به AD و HRM باید توسط فناوری بانک تعیین شود و در این مستند فرض نشده است.
 
-A separate HRM adapter must then resolve the authenticated user's organizational placement for Data Scope determination. The normalized application scope is `branch`, `region`, or `head_office`.
+## 7. Authorization و Data Scope
+Authentication و Authorization دو موضوع مجزا هستند.
 
-The concrete AD/HRM protocol, field names, endpoints, tables, and credentials are intentionally not assumed by this handover and must be supplied by Bank IT.
+قواعد Data Scope مورد توافق:
+- کاربر شعبه → فقط شعبه خودش
+- کاربر منطقه → شعب زیرمجموعه همان منطقه
+- کاربر ستادی → کل شبکه شعب
 
-Runtime settings:
-- `AUTH_MODE=enterprise`
-- `AUTH_ISSUER_URL`
-- `AUTH_CLIENT_ID`
-- secret/client credentials through the bank's approved secret-management mechanism where required.
+جایگاه سازمانی از HRM می‌آید، اما شعب زیرمجموعه و Hierarchy از Database داشبورد درجه‌بندی تعیین می‌شوند.
 
-The exact enterprise identity technology is not defined by the current source and must be selected by Bank IT.
+Functional Role از Data Scope جدا است.
 
-## 7. Authorization
-Authentication and authorization must remain separate concerns.
+مالکیت سناریو نیز مستقل است: هر کاربر فقط سناریوهای خود را مشاهده و مدیریت می‌کند؛ حتی اگر کاربر ستادی Data Scope کل شبکه داشته باشد.
 
-The agreed Data Scope rules are:
-- branch user -> own branch only;
-- region user -> branches subordinate to that region;
-- head-office user -> entire branch network.
+## 8. Configuration و Secrets
+مقادیر Production باید خارج از Source Code تزریق شوند.
 
-The user's organizational scope comes from HRM; the permitted branch IDs and region/subordinate hierarchy come from the Branch Grading Dashboard Database.
+`.env.example` فقط نام Settingها را مستند می‌کند و نباید مقدار واقعی Credential در آن قرار گیرد.
 
-Functional role permissions are separate from Data Scope.
+موارد اصلی:
+- Environment و Version
+- Period مبنا
+- نوع و Connection منبع داده
+- نوع و Connection Database سناریوها
+- Authentication Mode
+- اطلاعات لازم برای Enterprise Identity
 
-Saved-scenario visibility is also separate: every normal user sees and manages only scenarios where `owner_user_id` equals the authenticated user's ID. Organization hierarchy does not grant visibility to another user's scenarios.
+## 9. رفتار خطا
+در Production نباید Fallback پنهان انجام شود:
+- SQL Server به Excel
+- Enterprise Authentication به Local User
+- SQL Server Persistence به SQLite
 
-No integration implementation may assume that successful authentication automatically grants access to all branches or to another user's scenarios.
+اگر Adapter Production پیاده‌سازی یا تنظیم نشده باشد، سامانه باید صریحاً Fail شود.
 
-## 8. Configuration and secrets
-Production configuration must be injected externally. Real values must not be committed to Git.
+## 10. الزامات امنیتی
+فناوری بانک باید استانداردهای بانک را در این حوزه‌ها اعمال کند:
+- TLS / HTTPS
+- Network Segmentation و Firewall
+- Service Account
+- Least Privilege
+- Credential Rotation
+- Secret Storage
+- Database Permission
+- Session Security
+- Audit Log
+- Vulnerability Assessment
+- Backup و Restore
 
-The handover template is `.env.example`. It documents names only and contains no production credentials.
+## 11. معیارهای پذیرش Integration
+Integration برای UAT زمانی قابل پذیرش است که:
+1. Application بدون فایل داده Production محلی اجرا شود.
+2. هویت کاربر از AD به Contract داخلی نگاشت شود.
+3. جایگاه سازمانی از HRM تعیین شود.
+4. Data Scope صحیح اعمال شود.
+5. داده شعب از Database داشبورد درجه‌بندی خوانده شود.
+6. نتایج مدل برای Dataset یکسان با Baseline مصوب یکسان باشد.
+7. سناریوها پس از Restart باقی بمانند.
+8. Ownership و Concurrency روی SQL Server صحیح عمل کند.
+9. هیچ Secret واقعی در Git وجود نداشته باشد.
+10. خطاهای Integration قابل Logging و Monitoring باشند.
+11. UAT بدون تغییر ناخواسته در منطق محاسبات تأیید شود.
 
-Required production values include:
-- application environment/version;
-- baseline period;
-- data-source type and connection endpoint;
-- scenario database type and connection endpoint;
-- authentication mode and identity endpoint.
-
-## 9. Error behavior
-Production adapters must not silently fall back from:
-- SQL Server to Excel;
-- enterprise authentication to local user;
-- SQL Server persistence to SQLite.
-
-A missing/unimplemented production adapter must fail explicitly. This is intentional to avoid running the bank deployment against local prototype components by mistake.
-
-## 10. Security expectations
-Bank IT must apply the bank's security standards for:
-- TLS/HTTPS;
-- network segmentation/firewall rules;
-- service accounts;
-- least privilege;
-- credential rotation;
-- secret storage;
-- database permissions;
-- application/session security;
-- audit logs;
-- vulnerability assessment;
-- backup and restore.
-
-These controls are infrastructure requirements and are not fully implemented by the handover prototype.
-
-## 11. Integration acceptance criteria
-An integration is acceptable for UAT when:
-1. the application starts without local production-data files;
-2. enterprise identity resolves to the application user contract;
-3. approved users can access only permitted functions/data;
-4. branch data loads from the approved source for the requested period;
-5. model output matches the approved baseline for an identical population;
-6. scenarios persist across application restarts;
-7. SQL Server concurrency/ownership rules work under multi-user access;
-8. configuration contains no committed secrets;
-9. integration failures are logged and visible to operations;
-10. business UAT passes without changing approved calculation semantics.
-
-## 12. Ownership
-- Business owner: grading rules, indicator meaning, weights, scenario semantics, access-policy approval, UAT approval.
-- Bank IT: infrastructure, production adapters, SSO, database implementation, security, deployment, monitoring, backup, operational support.
-- Any change crossing the business/technical boundary must be documented and approved before production release.
+## 12. مسئولیت‌ها
+- **Business Owner:** قواعد درجه‌بندی، مفهوم شاخص‌ها، Weightها، منطق سناریوها، قواعد دسترسی و تأیید UAT.
+- **فناوری بانک:** AD، HRM Integration، Database Integration، Persistence، Security، Deployment، Monitoring، Backup و پشتیبانی عملیاتی.
+- هر تغییر در مرز Business و Technical باید مستند و پیش از Production تأیید شود.
