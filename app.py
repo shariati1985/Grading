@@ -10,7 +10,7 @@ from pathlib import Path
 from domain.scenario_contracts import ScenarioType
 from ui import initialize_session_state
 from ui.components import render_empty_state
-from ui.data_access import load_dashboard_data
+from config.runtime import load_runtime_config\nfrom ui.data_access import load_configured_dashboard_data
 from ui.sensitivity_labels import SCENARIO_TYPE_LABELS
 from ui.sensitivity_components import render_scenario_cards
 from ui.navigation import (
@@ -21,7 +21,7 @@ from ui.navigation import (
     scenario_href,
 )
 from ui.formatters import persian_digits
-from services.factory import create_local_scenario_service
+from services.factory import create_scenario_service
 from services.multi_branch_workspace_service import (
     SCENARIO_TYPE as MULTI_BRANCH_SCENARIO_TYPE,
     MultiBranchWorkspaceService,
@@ -76,15 +76,15 @@ def _open_saved(scenario_id: str, *, show_result: bool = False) -> None:
         st.switch_page("pages/2_Scenario_Builder.py")
     elif mode == ScenarioType.FOCUS_BRANCH_ONLY.value:
         loaded = _workspace_service().load_focus_scenario(
-            scenario_id, baseline_data=data, periods=["1404-04"], restore_execution=show_result
+            scenario_id, baseline_data=data, periods=[_runtime_config().base_period], restore_execution=show_result
         )
     elif mode == ScenarioType.TARGET_RANK.value:
         loaded = _workspace_service().load_target_scenario(
-            scenario_id, baseline_data=data, periods=["1404-04"], restore_execution=show_result
+            scenario_id, baseline_data=data, periods=[_runtime_config().base_period], restore_execution=show_result
         )
     else:
         loaded = _workspace_service().load_scenario(
-            scenario_id, branch_ids=data["branch_id"].astype(str), periods=["1404-04"]
+            scenario_id, branch_ids=data["branch_id"].astype(str), periods=[_runtime_config().base_period]
         )
         loaded.draft["persisted_result_summaries"] = list(loaded.results) if show_result else []
         loaded.draft["show_result"] = bool(show_result and loaded.results)
@@ -161,7 +161,7 @@ def overview_markup(*, branch_count: int, saved_count: str) -> str:
         '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/>'
         '<path d="M12 7.5V12l3.25 2"/></svg>'
     )
-    period = "1404-04".translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    period = _runtime_config().base_period.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
     return (
         '<h2 class="home-section-title">نمای کلی مدیریتی</h2>'
         '<div class="home-overview-grid">'
