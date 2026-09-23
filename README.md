@@ -48,7 +48,7 @@ The application is a functional prototype / pre-production handover baseline. Th
 ## Production boundary
 The current `app.py` still reads the local Excel baseline and the local composition uses SQLite. These are explicit integration points, not hidden assumptions. Bank IT should replace/configure them for the production environment without changing the approved business rules.
 
-See `docs/DEPLOYMENT_HANDOVER.md` for the production handover checklist.
+See the handover documents:\n- `docs/DEPLOYMENT_HANDOVER.md` — production deployment checklist.\n- `docs/DATA_CONTRACT.md` — canonical input/output data contract.\n- `docs/INTEGRATION_CONTRACT.md` — production integration boundaries and acceptance criteria.
 
 ## Security
 Do not commit passwords, tokens, connection strings, production certificates, or real bank data. Use environment/configuration management and the bank's approved secret-management mechanism.
