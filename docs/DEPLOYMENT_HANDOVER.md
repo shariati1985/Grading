@@ -1,81 +1,97 @@
-# Deployment & Production Handover
+# سند تحویل و استقرار Production
 
-## 1. Handover baseline
-This document applies to:
+## 1. مبنای تحویل
+این سند مربوط به نسخه زیر است:
 - Repository: `shariati1985/Grading`
 - Branch: `handover/grading-sensitivity-v1.0.0`
 - Version: `1.0.0`
-- Baseline commit before handover preparation: `df1bedb5de3098d3db7c5def77782d942121669b`
+- Commit مبنا قبل از آماده‌سازی Handover: `df1bedb5de3098d3db7c5def77782d942121669b`
 
-The branch is intended as the controlled source-code package for transfer to Bank IT.
+این Branch به‌عنوان نسخه کنترل‌شده سورس برای تحویل به فناوری بانک در نظر گرفته شده است.
 
-## 2. What is already implemented
-The repository includes:
-- Branch grading/ranking logic.
-- Scenario execution and comparison logic.
-- Branch-centric sensitivity analysis.
-- Multi-branch scenarios.
-- Target-rank scenarios.
-- Scenario save/restore workflows.
-- Streamlit UI and navigation.
-- Local SQLite scenario persistence.
-- Data contracts and repository abstractions.
-- Automated tests covering core calculation, persistence, workflow and UI behavior.
+## 2. اجزای پیاده‌سازی‌شده
+در نسخه فعلی موارد زیر وجود دارد:
+- منطق درجه‌بندی و رتبه‌بندی شعب
+- اجرای سناریو و مقایسه نتایج
+- تحلیل حساسیت تک‌شعبه‌ای
+- سناریوی چندشعبه‌ای
+- سناریوی Target Rank
+- ذخیره و بازیابی سناریو
+- رابط کاربری Streamlit
+- Persistence محلی سناریوها با SQLite
+- قراردادهای داده و Repository
+- تست‌های خودکار برای منطق محاسبات، Persistence، Workflow و UI
 
-## 3. Explicit pre-production limitations
-The following items are not complete production capabilities and must not be treated as such:
+## 3. محدودیت‌های نسخه Pre-Production
 
-### 3.1 Baseline data source
-The current Streamlit application loads `Data.xlsx` from the project root. Production must replace this local-file dependency with the bank-approved data source/integration mechanism.
+### 3.1 منبع داده
+نسخه Local قابلیت استفاده از `Data.xlsx` را دارد. در Production، منبع اصلی اطلاعات شعب و درجه‌بندی باید Database داشبورد درجه‌بندی شعب باشد.
 
-### 3.2 Scenario persistence
-The local runtime composes `SQLiteScenarioRepository`. This is suitable for prototype/local use only.
+### 3.2 Persistence سناریوها
+نسخه Local از `SQLiteScenarioRepository` استفاده می‌کند. این روش برای Production چندکاربره مناسب نیست.
 
-A `SqlServerScenarioRepository` contract-compatible skeleton exists, but its methods are intentionally unimplemented. Bank IT must implement and test the SQL Server repository for multi-user production use.
+کلاس `SqlServerScenarioRepository` به‌عنوان Contract و اسکلت فنی وجود دارد، اما پیاده‌سازی Production آن باید توسط فناوری بانک تکمیل و تست شود.
 
-### 3.3 Authentication and authorization
-Enterprise authentication is not wired into the current runtime. Bank IT must integrate the bank identity mechanism and apply approved role/data-scope rules.
+### 3.3 احراز هویت و دسترسی
+Integration سازمانی با AD و HRM باید در Production تکمیل شود:
+- AD برای Authentication
+- HRM برای تعیین جایگاه سازمانی و Data Scope
+- Database داشبورد درجه‌بندی برای تعیین شعب مجاز هر Scope
 
-## 4. Required Bank IT work
-1. Establish DEV / TEST / UAT / PROD environments.
-2. Configure enterprise identity/authentication.
-3. Implement role-based authorization and approved data scope.
-4. Replace Excel baseline data access with approved API / DB view / DWH / integration layer.
-5. Implement production SQL Server scenario persistence.
-6. Externalize runtime configuration and secrets.
-7. Configure HTTPS, reverse proxy, internal DNS and network controls.
-8. Add centralized application logging and audit logging.
-9. Add health monitoring and operational alerting.
-10. Define backup, restore and disaster-recovery procedures.
-11. Perform security review and vulnerability testing.
-12. Run automated tests and agreed UAT scenarios.
-13. Obtain business-owner approval before production release.
+## 4. اقدامات موردنیاز فناوری بانک
+1. ایجاد محیط‌های DEV، TEST، UAT و PROD.
+2. اتصال Authentication به AD.
+3. اتصال HRM برای استخراج جایگاه سازمانی کاربران.
+4. پیاده‌سازی Data Scope مصوب.
+5. اتصال به Database داشبورد درجه‌بندی شعب.
+6. پیاده‌سازی Persistence سناریوها روی SQL Server.
+7. Externalize کردن Runtime Configuration و Secrets.
+8. تنظیم HTTPS، Reverse Proxy، DNS داخلی و کنترل‌های شبکه.
+9. پیاده‌سازی Centralized Logging و Audit Log.
+10. پیاده‌سازی Monitoring و Alerting.
+11. تعریف Backup، Restore و Disaster Recovery.
+12. انجام Security Review و Vulnerability Assessment.
+13. اجرای Automated Testها و سناریوهای UAT.
+14. اخذ تأیید Business Owner پیش از انتشار Production.
 
-## 5. Business-rule ownership
-The ranking, grading, normalization, weighting and scenario-calculation rules are business-owned. Production integration or technical refactoring must not silently change calculation semantics. Any intentional rule change requires explicit business approval and regression testing.
+## 5. مالکیت قواعد کسب‌وکار
+قواعد رتبه‌بندی، درجه‌بندی، Normalization، Weighting و محاسبات سناریو متعلق به Business است. هرگونه Refactor یا Integration فنی نباید به‌صورت پنهان این قواعد را تغییر دهد.
 
-## 6. Data handling
-Real bank data, credentials, secrets and production connection strings must be supplied outside source control through approved bank mechanisms.
+هر تغییر در منطق محاسبات نیازمند:
+- تأیید Business Owner
+- Regression Test
+- ثبت نسخه تغییر
 
-The handover branch intentionally excludes:
+## 6. مدیریت داده و اطلاعات محرمانه
+موارد زیر نباید داخل Source Control قرار گیرند:
+- داده واقعی بانک
+- Password و Token
+- Connection String واقعی
+- Certificate
+- Database محلی Production
+- Log حاوی اطلاعات حساس
+- فایل‌های Secret Environment
+
+Branch تحویلی عمداً موارد زیر را نگهداری نمی‌کند:
 - `Data.xlsx`
-- generated `Branch_Ranking_New_Model.xlsx`
-- local SQLite databases
-- generated CSV/Power BI outputs
-- local user configuration
-- logs and environment secret files
+- `Branch_Ranking_New_Model.xlsx`
+- Databaseهای SQLite محلی
+- خروجی‌های تولیدی CSV / Power BI
+- Local User Configuration
+- Logها و Secrets
 
-## 7. Acceptance checks before production
-At minimum verify:
-- Baseline ranking output matches the approved reference results.
-- Scenario calculations match the handover version.
-- Save / restore / version workflows operate correctly under SQL Server.
-- Concurrent-user behavior is tested.
-- User permissions and data scope are enforced.
-- Audit records are complete.
-- No production secrets exist in source control.
-- Monitoring and backup procedures are operational.
-- UAT is signed off by the business owner.
+## 7. کنترل‌های لازم پیش از Production
+حداقل موارد زیر باید تأیید شوند:
+- نتایج رتبه‌بندی مبنا با خروجی مرجع مصوب یکسان باشد.
+- نتایج سناریو با نسخه Handover یکسان باشد.
+- Save / Restore / Version روی SQL Server صحیح عمل کند.
+- رفتار چندکاربره و Concurrency تست شود.
+- Data Scope و Permissionها enforce شوند.
+- مالکیت خصوصی سناریوها enforce شود.
+- Audit Log کامل باشد.
+- هیچ Secretای در Git وجود نداشته باشد.
+- Monitoring و Backup عملیاتی باشند.
+- UAT توسط Business Owner تأیید شود.
 
-## 8. Release-control recommendation
-After Bank IT completes integration and UAT, create a controlled production release/tag derived from this handover branch. Do not deploy an arbitrary working branch to production.
+## 8. کنترل Release
+پس از تکمیل Integration و UAT، نسخه Production باید به‌صورت Release/Tag کنترل‌شده از Branch تحویلی ایجاد شود. استقرار مستقیم از Working Branch توصیه نمی‌شود.
