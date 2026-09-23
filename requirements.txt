@@ -1,6 +1,7 @@
-streamlit
-pandas
-numpy
-plotly
-openpyxl
-pytest
+# Runtime dependencies for the handover baseline.
+# Major versions are bounded to avoid unreviewed breaking upgrades.
+streamlit>=1.39,<2
+pandas>=2.2,<3
+numpy>=2.0,<3
+plotly>=5.24,<7
+openpyxl>=3.1,<4
