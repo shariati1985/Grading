@@ -4,9 +4,7 @@
 - Repository: `shariati1985/Grading`
 - Branch تحویل: `handover/grading-sensitivity-v1.0.0`
 - Version: `1.0.0`
-- Commit مرجع فعلی: `4e3e8c98faa84826bb092b01a9c6e079e501fd29`
-
-مرجع اصلی سورس، همین Branch است. هر نسخه ZIP یا Release رسمی باید از همین Commit یا Commit نهایی بعدیِ مستندشده تهیه شود.
+مرجع اصلی سورس، **HEAD همین Branch تحویلی** است. هر ZIP یا Release رسمی باید از HEAD مورد تأیید این Branch تهیه و SHA آن در صورتجلسه یا Release ثبت شود.
 
 ## 2. اقلام سورس کد
 پکیج سورس شامل موارد زیر است:
