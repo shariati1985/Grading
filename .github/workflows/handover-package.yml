@@ -1,0 +1,36 @@
+name: Build Handover Package
+
+on:
+  push:
+    branches:
+      - handover/grading-sensitivity-v1.0.0
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout handover source
+        uses: actions/checkout@v4
+
+      - name: Remove non-deliverable local data if present
+        shell: bash
+        run: |
+          rm -f Data.xlsx Branch_Ranking_New_Model.xlsx
+          find . -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" | xargs -r rm -f
+
+      - name: Create source and documentation package
+        shell: bash
+        run: |
+          mkdir -p package/Grading-Sensitivity-v1.0.0
+          rsync -a --exclude ".git" --exclude "package" ./ package/Grading-Sensitivity-v1.0.0/
+          cd package
+          zip -r ../grading-sensitivity-v1.0.0.zip Grading-Sensitivity-v1.0.0
+
+      - name: Upload handover package
+        uses: actions/upload-artifact@v4
+        with:
+          name: grading-sensitivity-v1.0.0
+          path: grading-sensitivity-v1.0.0.zip
+          if-no-files-found: error
+          retention-days: 30
